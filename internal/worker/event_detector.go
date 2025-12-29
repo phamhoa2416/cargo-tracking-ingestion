@@ -98,7 +98,7 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 			BatteryLevel: *t.BatteryLevel,
 			Threshold:    20,
 		}
-		if e, err := e.WithMetadata(metadata); err != nil {
+		if e, err := e.WithMetadata(metadata); err == nil {
 			events = append(events, e)
 		}
 	}
@@ -112,7 +112,7 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 			SignalStrength: *t.SignalStrength,
 			Threshold:      -80,
 		}
-		if e, err := e.WithMetadata(metadata); err != nil {
+		if e, err := e.WithMetadata(metadata); err == nil {
 			events = append(events, e)
 		}
 	}
