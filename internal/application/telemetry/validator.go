@@ -3,15 +3,26 @@ package telemetry
 import (
 	telemetry2 "cargo-tracking-ingestion/internal/domain/telemetry"
 	"fmt"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 func ValidateTelemetry(t *telemetry2.Telemetry) error {
-	if t.DeviceID.String() == "00000000-0000-0000-0000-000000000000" {
-		return fmt.Errorf("device_id is required")
+	if t.DeviceID == uuid.Nil {
+		return fmt.Errorf("device_id is required and cannot be zero UUID")
 	}
 
-	if t.HardwareUID.String() == "00000000-0000-0000-0000-000000000000" {
-		return fmt.Errorf("hardware_uid is required")
+	if t.HardwareUID == uuid.Nil {
+		return fmt.Errorf("hardware_uid is required and cannot be zero UUID")
+	}
+
+	now := time.Now()
+	if t.Time.After(now.Add(1 * time.Hour)) {
+		return fmt.Errorf("timestamp cannot be more than 1 hour in the future")
+	}
+	if t.Time.Before(now.Add(-365 * 24 * time.Hour)) {
+		return fmt.Errorf("timestamp cannot be more than 1 year in the past")
 	}
 
 	// Validate GPS coordinates if provided
@@ -73,16 +84,25 @@ func ValidateTelemetry(t *telemetry2.Telemetry) error {
 }
 
 func ValidateHeartbeat(h *telemetry2.Heartbeat) error {
-	if h.DeviceID.String() == "00000000-0000-0000-0000-000000000000" {
-		return fmt.Errorf("device_id is required")
+	// Validate UUIDs - check for zero UUID
+	if h.DeviceID == uuid.Nil {
+		return fmt.Errorf("device_id is required and cannot be zero UUID")
 	}
 
-	if h.HardwareUID.String() == "00000000-0000-0000-0000-000000000000" {
-		return fmt.Errorf("hardware_uid is required")
+	if h.HardwareUID == uuid.Nil {
+		return fmt.Errorf("hardware_uid is required and cannot be zero UUID")
 	}
 
 	if h.Timestamp.IsZero() {
 		return fmt.Errorf("timestamp is required")
+	}
+
+	now := time.Now()
+	if h.Timestamp.After(now.Add(1 * time.Hour)) {
+		return fmt.Errorf("timestamp cannot be more than 1 hour in the future")
+	}
+	if h.Timestamp.Before(now.Add(-365 * 24 * time.Hour)) {
+		return fmt.Errorf("timestamp cannot be more than 1 year in the past")
 	}
 
 	if h.BatteryLevel != nil {
