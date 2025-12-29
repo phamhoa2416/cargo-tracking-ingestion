@@ -4,8 +4,8 @@
 -- Enable TimescaleDB extension
 CREATE TABLE device_telemetry
 (
-    time            TIMESTAMPTZ NOT NULL,
     device_id       UUID        NOT NULL,
+    time            TIMESTAMPTZ NOT NULL,
     hardware_uid    UUID        NOT NULL,
 
     temperature     DOUBLE PRECISION,
@@ -32,14 +32,14 @@ CREATE TABLE device_telemetry
 
 SELECT create_hypertable(
                'device_telemetry',
-               'timestamp',
+               'time',
                chunk_time_interval => INTERVAL '1 day'
        );
 
 ALTER TABLE device_telemetry
     SET (
         timescaledb.compress,
-        timescaledb.compress_orderby = 'timestamp DESC',
+        timescaledb.compress_orderby = 'time DESC',
         timescaledb.compress_segmentby = 'device_id, hardware_uid'
         );
 
@@ -75,7 +75,7 @@ SELECT create_hypertable(
                chunk_time_interval => INTERVAL '7 days'
        );
 
-CREATE INDEX ON device_events (device_id, time DESC);
+CREATE INDEX ON device_events (device_id, time, event_type DESC);
 
 CREATE TABLE shipment_tracking
 (

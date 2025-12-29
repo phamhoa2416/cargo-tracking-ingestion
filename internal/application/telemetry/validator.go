@@ -1,0 +1,95 @@
+package telemetry
+
+import (
+	telemetry2 "cargo-tracking-ingestion/internal/domain/telemetry"
+	"fmt"
+)
+
+func ValidateTelemetry(t *telemetry2.Telemetry) error {
+	if t.DeviceID.String() == "00000000-0000-0000-0000-000000000000" {
+		return fmt.Errorf("device_id is required")
+	}
+
+	if t.HardwareUID.String() == "00000000-0000-0000-0000-000000000000" {
+		return fmt.Errorf("hardware_uid is required")
+	}
+
+	// Validate GPS coordinates if provided
+	if t.Latitude != nil {
+		if *t.Latitude < -90 || *t.Latitude > 90 {
+			return fmt.Errorf("latitude must be between -90 and 90")
+		}
+	}
+
+	if t.Longitude != nil {
+		if *t.Longitude < -180 || *t.Longitude > 180 {
+			return fmt.Errorf("longitude must be between -180 and 180")
+		}
+	}
+
+	// Validate temperature if provided
+	if t.Temperature != nil {
+		if *t.Temperature < -100 || *t.Temperature > 100 {
+			return fmt.Errorf("temperature out of reasonable range")
+		}
+	}
+
+	// Validate humidity if provided
+	if t.Humidity != nil {
+		if *t.Humidity < 0 || *t.Humidity > 100 {
+			return fmt.Errorf("humidity must be between 0 and 100")
+		}
+	}
+
+	// Validate battery level if provided
+	if t.BatteryLevel != nil {
+		if *t.BatteryLevel < 0 || *t.BatteryLevel > 100 {
+			return fmt.Errorf("battery_level must be between 0 and 100")
+		}
+	}
+
+	// Validate speed if provided
+	if t.Speed != nil {
+		if *t.Speed < 0 {
+			return fmt.Errorf("speed cannot be negative")
+		}
+	}
+
+	// Validate heading if provided
+	if t.Heading != nil {
+		if *t.Heading < 0 || *t.Heading > 360 {
+			return fmt.Errorf("heading must be between 0 and 360")
+		}
+	}
+
+	// Validate accuracy if provided
+	if t.Accuracy != nil {
+		if *t.Accuracy < 0 {
+			return fmt.Errorf("accuracy cannot be negative")
+		}
+	}
+
+	return nil
+}
+
+func ValidateHeartbeat(h *telemetry2.Heartbeat) error {
+	if h.DeviceID.String() == "00000000-0000-0000-0000-000000000000" {
+		return fmt.Errorf("device_id is required")
+	}
+
+	if h.HardwareUID.String() == "00000000-0000-0000-0000-000000000000" {
+		return fmt.Errorf("hardware_uid is required")
+	}
+
+	if h.Timestamp.IsZero() {
+		return fmt.Errorf("timestamp is required")
+	}
+
+	if h.BatteryLevel != nil {
+		if *h.BatteryLevel < 0 || *h.BatteryLevel > 100 {
+			return fmt.Errorf("battery_level must be between 0 and 100")
+		}
+	}
+
+	return nil
+}
