@@ -1,24 +1,109 @@
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg15
-    container_name: timescaledb
+    container_name: cargo-timescaledb
     environment:
-      POSTGRES_USER: ingestion
-      POSTGRES_PASSWORD: ingestion
-      POSTGRES_DB: telemetry
+      POSTGRES_DB: cargo_tracking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
-      - timescale_data:/var/lib/postgresql/data
+      - timescale-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: redis
+    container_name: cargo-redis
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cargo-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  emqx:
+    image: emqx/emqx:5.3.2
+    container_name: cargo-emqx
+    environment:
+      - EMQX_NAME=emqx
+      - EMQX_HOST=127.0.0.1
+    ports:
+      - "1883:1883"
+      - "8883:8883"
+      - "8083:8083"
+      - "8084:8084"
+      - "18083:18083"
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    healthcheck:
+      test: [ "CMD", "/opt/emqx/bin/emqx", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+#  ingestion-service:
+#    build: .
+#    container_name: cargo-ingestion-service
+#    depends_on:
+#      timescaledb:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#      rabbitmq:
+#        condition: service_healthy
+#      emqx:
+#        condition: service_healthy
+#    environment:
+#      - DB_HOST=timescaledb
+#      - DB_PORT=5432
+#      - DB_USER=postgres
+#      - DB_PASSWORD=postgres
+#      - DB_NAME=cargo_tracking
+#      - REDIS_HOST=redis
+#      - REDIS_PORT=6379
+#      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+#      - MQTT_BROKER=emqx
+#      - MQTT_PORT=1883
+#    ports:
+#      - "8080:8080"
+#    volumes:
+#      - ./config:/app/config
+#    restart: unless-stopped
+
 volumes:
-  timescale_data:
-  redis_data:
+  timescale-data:
+  redis-data:
+  rabbitmq-data:
+  emqx-data:
+  emqx-log:
+
+networks:
+  default:
+    name: cargo-network
