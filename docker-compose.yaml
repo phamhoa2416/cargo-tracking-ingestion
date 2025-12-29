@@ -1,0 +1,24 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: timescaledb
+    environment:
+      POSTGRES_USER: ingestion
+      POSTGRES_PASSWORD: ingestion
+      POSTGRES_DB: telemetry
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+volumes:
+  timescale_data:
+  redis_data:
