@@ -4,29 +4,44 @@ import (
 	"cargo-tracking-ingestion/internal/domain/event"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
 	"cargo-tracking-ingestion/internal/infrastructure/timescale"
+	"cargo-tracking-ingestion/internal/resilience"
 	"context"
 	"log"
 	"sync"
+	"time"
 )
 
 type EventDetector struct {
-	repo      *timescale.Repository
-	eventChan chan *telemetry.Telemetry
-	workers   int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	repo           *timescale.Repository
+	eventChan      chan *telemetry.Telemetry
+	workers        int
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	circuitBreaker *resilience.CircuitBreaker
+	retryConfig    resilience.RetryConfig
 }
 
 func NewEventDetector(repo *timescale.Repository, workers int) *EventDetector {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	retryCfg := resilience.DefaultRetryConfig()
+	retryCfg.MaxAttempts = 3
+	retryCfg.InitialDelay = 500 * time.Millisecond
+	retryCfg.MaxDelay = 5 * time.Second
+
+	cbConfig := resilience.DefaultConfig()
+	cbConfig.FailureThreshold = 5
+	cbConfig.Timeout = 30 * time.Second
+
 	return &EventDetector{
-		repo:      repo,
-		eventChan: make(chan *telemetry.Telemetry, 1000),
-		workers:   workers,
-		ctx:       ctx,
-		cancel:    cancel,
+		repo:           repo,
+		eventChan:      make(chan *telemetry.Telemetry, 1000),
+		workers:        workers,
+		ctx:            ctx,
+		cancel:         cancel,
+		circuitBreaker: resilience.New(cbConfig),
+		retryConfig:    retryCfg,
 	}
 }
 
@@ -77,9 +92,22 @@ func (ed *EventDetector) detectAndSave(t *telemetry.Telemetry) {
 		return
 	}
 
-	ctx := context.Background()
-	if err := ed.repo.BatchInsertEvents(ctx, events); err != nil {
-		log.Printf("Failed to insert events for device %s: %v", t.DeviceID, err)
+	ctx, cancel := context.WithTimeout(ed.ctx, 10*time.Second)
+	defer cancel()
+
+	// Use circuit breaker and retry
+	err := ed.circuitBreaker.Execute(ctx, func() error {
+		return resilience.Do(ctx, ed.retryConfig, func() error {
+			return ed.repo.BatchInsertEvents(ctx, events)
+		})
+	})
+
+	if err != nil {
+		if ed.circuitBreaker.IsOpen() {
+			log.Printf("Circuit breaker is open, dropping %d events for device %s: %v", len(events), t.DeviceID, err)
+		} else {
+			log.Printf("Failed to insert events for device %s after retries: %v", t.DeviceID, err)
+		}
 	} else {
 		log.Printf("Detected and saved %d events for device %s", len(events), t.DeviceID)
 	}
