@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"github.com/google/uuid"
@@ -93,47 +94,71 @@ func (ps *PubSub) PublishShipmentUpdate(ctx context.Context, update *ShipmentUpd
 }
 
 func (ps *PubSub) SubscribeTelemetryUpdates(ctx context.Context, handler func(update *TelemetryUpdate)) error {
-	return ps.subscribe(ctx, channelTelemetryUpdates, func(msg *redis.Message) {
-		var update TelemetryUpdate
-		if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
-			log.Printf("Failed to unmarshal telemetry update: %v", err)
-			return
+	go func() {
+		if err := ps.subscribe(ctx, channelTelemetryUpdates, func(msg *redis.Message) {
+			var update TelemetryUpdate
+			if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
+				log.Printf("Failed to unmarshal telemetry update: %v", err)
+				return
+			}
+			handler(&update)
+		}); err != nil && ctx.Err() == nil {
+			log.Printf("Telemetry subscription stopped: %v", err)
 		}
-		handler(&update)
-	})
+	}()
+
+	return nil
 }
 
 func (ps *PubSub) SubscribeEventAlerts(ctx context.Context, handler func(*EventAlert)) error {
-	return ps.subscribe(ctx, channelEventAlerts, func(msg *redis.Message) {
-		var alert EventAlert
-		if err := json.Unmarshal([]byte(msg.Payload), &alert); err != nil {
-			log.Printf("Failed to unmarshal event alert: %v", err)
-			return
+	go func() {
+		if err := ps.subscribe(ctx, channelEventAlerts, func(msg *redis.Message) {
+			var alert EventAlert
+			if err := json.Unmarshal([]byte(msg.Payload), &alert); err != nil {
+				log.Printf("Failed to unmarshal event alert: %v", err)
+				return
+			}
+			handler(&alert)
+		}); err != nil && ctx.Err() == nil {
+			log.Printf("Event alert subscription stopped: %v", err)
 		}
-		handler(&alert)
-	})
+	}()
+
+	return nil
 }
 
 func (ps *PubSub) SubscribeDeviceStatus(ctx context.Context, handler func(*DeviceStatusUpdate)) error {
-	return ps.subscribe(ctx, channelDeviceStatus, func(msg *redis.Message) {
-		var status DeviceStatusUpdate
-		if err := json.Unmarshal([]byte(msg.Payload), &status); err != nil {
-			log.Printf("Failed to unmarshal device status: %v", err)
-			return
+	go func() {
+		if err := ps.subscribe(ctx, channelDeviceStatus, func(msg *redis.Message) {
+			var status DeviceStatusUpdate
+			if err := json.Unmarshal([]byte(msg.Payload), &status); err != nil {
+				log.Printf("Failed to unmarshal device status: %v", err)
+				return
+			}
+			handler(&status)
+		}); err != nil && ctx.Err() == nil {
+			log.Printf("Device status subscription stopped: %v", err)
 		}
-		handler(&status)
-	})
+	}()
+
+	return nil
 }
 
 func (ps *PubSub) SubscribeShipmentUpdates(ctx context.Context, handler func(*ShipmentUpdate)) error {
-	return ps.subscribe(ctx, channelShipmentUpdates, func(msg *redis.Message) {
-		var update ShipmentUpdate
-		if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
-			log.Printf("Failed to unmarshal shipment update: %v", err)
-			return
+	go func() {
+		if err := ps.subscribe(ctx, channelShipmentUpdates, func(msg *redis.Message) {
+			var update ShipmentUpdate
+			if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
+				log.Printf("Failed to unmarshal shipment update: %v", err)
+				return
+			}
+			handler(&update)
+		}); err != nil && ctx.Err() == nil {
+			log.Printf("Shipment update subscription stopped: %v", err)
 		}
-		handler(&update)
-	})
+	}()
+
+	return nil
 }
 
 func (ps *PubSub) subscribe(ctx context.Context, channel string, handler func(message *redis.Message)) error {
@@ -147,12 +172,20 @@ func (ps *PubSub) subscribe(ctx context.Context, channel string, handler func(me
 			return ctx.Err()
 		case msg, ok := <-ch:
 			if !ok {
-				return nil
+				return fmt.Errorf("channel closed")
 			}
 			if msg == nil {
 				continue
 			}
-			handler(msg)
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("Panic in handler: %v", r)
+					}
+				}()
+				handler(msg)
+			}()
 		}
 	}
 }

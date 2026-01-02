@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -178,77 +179,27 @@ func (c *Cache) GetShipmentDevices(ctx context.Context, shipmentID uuid.UUID) ([
 func (c *Cache) AddShipmentDevice(ctx context.Context, shipmentID, deviceID uuid.UUID) error {
 	key := shipmentDevicesPrefix + shipmentID.String()
 	pipe := c.client.Client().Pipeline()
-	pipe.SAdd(ctx, key, deviceID.String())
-	pipe.Expire(ctx, key, shipmentDevicesTTL)
+	addCmd := pipe.SAdd(ctx, key, deviceID.String())
+	expireCmd := pipe.Expire(ctx, key, shipmentDevicesTTL)
 	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("pipeline failed: %w", err)
+	}
+
+	if err := addCmd.Err(); err != nil {
+		return fmt.Errorf("sadd failed: %w", err)
+	}
+
+	if err := expireCmd.Err(); err != nil {
+		return fmt.Errorf("expire failed: %w", err)
+	}
+
 	return err
 }
 
 func (c *Cache) RemoveShipmentDevice(ctx context.Context, shipmentID, deviceID uuid.UUID) error {
 	key := shipmentDevicesPrefix + shipmentID.String()
 	return c.client.Client().SRem(ctx, key, deviceID.String()).Err()
-}
-
-func (c *Cache) BatchGetDeviceInfo(ctx context.Context, deviceIDs []uuid.UUID) (map[uuid.UUID]*DeviceInfo, error) {
-	if len(deviceIDs) == 0 {
-		return make(map[uuid.UUID]*DeviceInfo), nil
-	}
-
-	pipe := c.client.Client().Pipeline()
-	cmds := make(map[uuid.UUID]*redis.StringCmd)
-
-	for _, id := range deviceIDs {
-		key := deviceInfoPrefix + id.String()
-		cmds[id] = pipe.Get(ctx, key)
-	}
-
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, err
-	}
-
-	result := make(map[uuid.UUID]*DeviceInfo)
-	for id, cmd := range cmds {
-		data, err := cmd.Bytes()
-		if errors.Is(err, redis.Nil) {
-			continue
-		}
-		if err != nil {
-			continue
-		}
-
-		var info DeviceInfo
-		if err := json.Unmarshal(data, &info); err == nil {
-			result[id] = &info
-		}
-	}
-
-	return result, nil
-}
-
-func (c *Cache) IncrementMetric(ctx context.Context, metric string, delta int64) error {
-	key := "metrics:" + metric
-	return c.client.Client().IncrBy(ctx, key, delta).Err()
-}
-
-func (c *Cache) GetMetric(ctx context.Context, metric string) (int64, error) {
-	key := "metrics:" + metric
-	return c.client.Client().Get(ctx, key).Int64()
-}
-
-func (c *Cache) SetExpiring(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	return c.client.Client().Set(ctx, key, data, ttl).Err()
-}
-
-func (c *Cache) GetJSON(ctx context.Context, key string, dest interface{}) error {
-	data, err := c.client.Client().Get(ctx, key).Bytes()
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, dest)
 }
 
 func (c *Cache) FlushDeviceCache(ctx context.Context, deviceID uuid.UUID) error {

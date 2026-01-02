@@ -82,8 +82,6 @@ func (c *Consumer) consumeLoop(ctx context.Context) {
 			return
 		case <-ctx.Done():
 			return
-		case <-c.client.ReconnectNotify():
-			log.Println("Received reconnect notification, restarting consumer...")
 		}
 	}
 }

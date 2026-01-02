@@ -31,7 +31,6 @@ type EventMessage struct {
 	Source      string                 `json:"source"`
 	EventType   string                 `json:"event_type"`
 	DeviceID    uuid.UUID              `json:"device_id"`
-	HardwareUID *uuid.UUID             `json:"hardware_uid,omitempty"`
 	Severity    string                 `json:"severity"`
 	Description string                 `json:"description"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
@@ -43,7 +42,6 @@ type DeviceUpdateMessage struct {
 	Timestamp      time.Time  `json:"timestamp"`
 	UpdateType     string     `json:"update_type"`
 	DeviceID       uuid.UUID  `json:"device_id"`
-	HardwareUID    *uuid.UUID `json:"hardware_uid,omitempty"`
 	IsOnline       *bool      `json:"is_online,omitempty"`
 	LastSeen       *time.Time `json:"last_seen,omitempty"`
 	BatteryLevel   *int       `json:"battery_level,omitempty"`
@@ -79,7 +77,6 @@ func (p *Publisher) PublishEvent(ctx context.Context, e *event.Event) error {
 		Source:      "cargo-tracking-ingestion",
 		EventType:   string(e.EventType),
 		DeviceID:    e.DeviceID,
-		HardwareUID: e.HardwareUID,
 		Severity:    string(e.Severity),
 		Description: "",
 		EventTime:   e.Time,
@@ -111,7 +108,7 @@ func (p *Publisher) PublishEventBatch(ctx context.Context, events []*event.Event
 	return lastErr
 }
 
-func (p *Publisher) PublishDeviceHeartbeat(ctx context.Context, deviceID, hardwareUID uuid.UUID, batteryLevel, signalStrength *int, timestamp time.Time) error {
+func (p *Publisher) PublishDeviceHeartbeat(ctx context.Context, deviceID uuid.UUID, batteryLevel, signalStrength *int, timestamp time.Time) error {
 	messageID := uuid.New().String()
 	isOnline := true
 
@@ -120,7 +117,6 @@ func (p *Publisher) PublishDeviceHeartbeat(ctx context.Context, deviceID, hardwa
 		Timestamp:      time.Now(),
 		UpdateType:     "heartbeat",
 		DeviceID:       deviceID,
-		HardwareUID:    &hardwareUID,
 		IsOnline:       &isOnline,
 		LastSeen:       &timestamp,
 		BatteryLevel:   batteryLevel,
@@ -181,11 +177,23 @@ func (p *Publisher) publish(ctx context.Context, routingKey, messageID string, m
 		MessageId:    messageID,
 	}
 
-	err = p.client.Publish(ctx, p.config.Exchange, routingKey, publishing)
-	if err != nil {
-		return fmt.Errorf("failed to publish message: %w", err)
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err = p.client.Publish(ctx, p.config.Exchange, routingKey, publishing)
+		if err == nil {
+			log.Printf("Published to %s: %s", p.config.Exchange, routingKey)
+			return nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries {
+			log.Printf("Publish failed (attempt %d/%d): %v. Retrying...",
+				attempt, maxRetries, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 	}
 
-	log.Printf("Published message %s to %s with routing key: %s", messageID, p.config.Exchange, routingKey)
-	return nil
+	return fmt.Errorf("publish failed after %d attempts: %w", maxRetries, lastErr)
 }

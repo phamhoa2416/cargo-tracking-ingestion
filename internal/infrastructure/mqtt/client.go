@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -18,15 +20,15 @@ type MessageHandler func(payload []byte, topic string) error
 type Client struct {
 	client           mqtt.Client
 	config           *config.MQTTConfig
+	connected        atomic.Bool
+	mu               sync.RWMutex
 	telemetryHandler MessageHandler
 	heartbeatHandler MessageHandler
-	connected        bool
 }
 
 func NewClient(config *config.MQTTConfig) *Client {
 	return &Client{
-		config:    config,
-		connected: false,
+		config: config,
 	}
 }
 
@@ -44,12 +46,12 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
 		log.Printf("Connection lost: %v", err)
-		c.connected = false
+		c.connected.Store(false)
 	})
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
 		log.Println("MQTT connected successfully")
-		c.connected = true
+		c.connected.Store(true)
 
 		if err := c.subscribe(); err != nil {
 			log.Printf("Failed to subscribe on reconnect: %v", err)
@@ -73,16 +75,45 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 func (c *Client) subscribe() error {
-	token := c.client.Subscribe(c.config.TelemetryTopic, byte(c.config.QoS), c.telemetryMessageHandler)
+	c.mu.RLock()
+	telemetryHandler := c.telemetryHandler
+	heartbeatHandler := c.heartbeatHandler
+	c.mu.RUnlock()
+
+	token := c.client.Subscribe(c.config.TelemetryTopic, byte(c.config.QoS), func(client mqtt.Client, msg mqtt.Message) {
+		c.mu.RLock()
+		handler := c.telemetryHandler
+		c.mu.RUnlock()
+
+		if handler != nil {
+			if err := handler(msg.Payload(), msg.Topic()); err != nil {
+				log.Printf("Error handling telemetry message: %v", err)
+			}
+		}
+	})
 	if !token.WaitTimeout(5 * time.Second) {
 		return fmt.Errorf("telemetry subscription timeout")
 	}
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("failed to subscribe to telemetry: %w", err)
 	}
-	log.Printf("Subscribe to telemetry topic: %s", c.config.TelemetryTopic)
+	log.Printf("Subscribed to telemetry topic: %s", c.config.TelemetryTopic)
 
-	token = c.client.Subscribe(c.config.HeartbeatTopic, byte(c.config.QoS), c.heartbeatMessageHandler)
+	// Avoid unused variable warning
+	_ = telemetryHandler
+	_ = heartbeatHandler
+
+	token = c.client.Subscribe(c.config.HeartbeatTopic, byte(c.config.QoS), func(client mqtt.Client, msg mqtt.Message) {
+		c.mu.RLock()
+		handler := c.heartbeatHandler
+		c.mu.RUnlock()
+
+		if handler != nil {
+			if err := handler(msg.Payload(), msg.Topic()); err != nil {
+				log.Printf("Error handling heartbeat message: %v", err)
+			}
+		}
+	})
 	if !token.WaitTimeout(5 * time.Second) {
 		return fmt.Errorf("heartbeat subscription timeout")
 	}
@@ -94,32 +125,20 @@ func (c *Client) subscribe() error {
 	return nil
 }
 
-func (c *Client) telemetryMessageHandler(client mqtt.Client, msg mqtt.Message) {
-	if c.telemetryHandler != nil {
-		if err := c.telemetryHandler(msg.Payload(), msg.Topic()); err != nil {
-			log.Printf("Error handling telemetry message: %v", err)
-		}
-	}
-}
-
-func (c *Client) heartbeatMessageHandler(client mqtt.Client, msg mqtt.Message) {
-	if c.heartbeatHandler != nil {
-		if err := c.heartbeatHandler(msg.Payload(), msg.Topic()); err != nil {
-			log.Printf("Error handling heartbeat message: %v", err)
-		}
-	}
-}
-
 func (c *Client) SetTelemetryHandler(handler MessageHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.telemetryHandler = handler
 }
 
 func (c *Client) SetHeartbeatHandler(handler MessageHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.heartbeatHandler = handler
 }
 
 func (c *Client) Publish(topic string, payload interface{}) error {
-	if !c.connected {
+	if !c.connected.Load() {
 		return fmt.Errorf("mqtt client not connected")
 	}
 
@@ -130,7 +149,7 @@ func (c *Client) Publish(topic string, payload interface{}) error {
 
 	token := c.client.Publish(topic, byte(c.config.QoS), false, data)
 	if !token.WaitTimeout(c.config.ConnectTimeout) {
-		return fmt.Errorf("connection timeout")
+		return fmt.Errorf("publish timeout")
 	}
 
 	return token.Error()
@@ -144,12 +163,13 @@ func (c *Client) PublishCommand(deviceId uuid.UUID, command interface{}) error {
 func (c *Client) Disconnect() {
 	if c.client != nil && c.client.IsConnected() {
 		c.client.Disconnect(250)
+		c.connected.Store(false)
 		log.Println("MQTT client disconnected")
 	}
 }
 
 func (c *Client) IsConnected() bool {
-	return c.connected && c.client != nil && c.client.IsConnected()
+	return c.connected.Load() && c.client != nil && c.client.IsConnected()
 }
 
 func ParseTelemetryPayload(payload []byte) (*telemetry.Telemetry, error) {

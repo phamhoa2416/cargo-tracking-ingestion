@@ -58,13 +58,16 @@ func (bw *BatchWriter) Stop() {
 	bw.cancel()
 	bw.wg.Wait()
 
+	// Flush remaining data
 	bw.mu.Lock()
-	if len(bw.buffer) > 0 {
-		if err := bw.flush(); err != nil {
+	remaining := bw.drainBuffer()
+	bw.mu.Unlock()
+
+	if len(remaining) > 0 {
+		if err := bw.flushBatch(remaining); err != nil {
 			log.Printf("Error flushing remaining data on shutdown: %v", err)
 		}
 	}
-	bw.mu.Unlock()
 
 	log.Println("Batch writer stopped")
 }
@@ -75,12 +78,10 @@ func (bw *BatchWriter) Add(t *telemetry.Telemetry) {
 	shouldFlush := len(bw.buffer) >= bw.config.BatchSize
 	bw.mu.Unlock()
 
-	// Signal flush if batch size reached (non-blocking)
 	if shouldFlush {
 		select {
 		case bw.flushSignal <- struct{}{}:
 		default:
-			// Signal already pending, skip
 		}
 	}
 }
@@ -96,37 +97,46 @@ func (bw *BatchWriter) run() {
 		case <-bw.ctx.Done():
 			return
 		case <-ticker.C:
-			bw.mu.Lock()
-			if len(bw.buffer) > 0 {
-				if err := bw.flush(); err != nil {
-					log.Printf("Error flushing batch on timeout: %v", err)
-				}
-			}
-			bw.mu.Unlock()
-
+			bw.tryFlush()
 		case <-bw.flushSignal:
-			bw.mu.Lock()
-			if len(bw.buffer) > 0 {
-				if err := bw.flush(); err != nil {
-					log.Printf("Error flushing batch on size limit: %v", err)
-				}
-			}
-			bw.mu.Unlock()
+			bw.tryFlush()
 		}
 	}
 }
 
-func (bw *BatchWriter) flush() error {
+// drainBuffer extracts and clears the buffer. Must be called with mu held.
+func (bw *BatchWriter) drainBuffer() []*telemetry.Telemetry {
 	if len(bw.buffer) == 0 {
 		return nil
 	}
-
 	batch := make([]*telemetry.Telemetry, len(bw.buffer))
 	copy(batch, bw.buffer)
 	bw.buffer = bw.buffer[:0]
+	return batch
+}
 
+// tryFlush attempts to flush the current buffer
+func (bw *BatchWriter) tryFlush() {
+	bw.mu.Lock()
+	batch := bw.drainBuffer()
 	bw.mu.Unlock()
-	defer bw.mu.Lock()
+
+	if len(batch) == 0 {
+		return
+	}
+
+	if err := bw.flushBatch(batch); err != nil {
+		log.Printf("Error flushing batch: %v", err)
+		// Re-queue the failed batch
+		bw.requeueBatch(batch)
+	}
+}
+
+// flushBatch writes a batch to the database. Does NOT hold the mutex.
+func (bw *BatchWriter) flushBatch(batch []*telemetry.Telemetry) error {
+	if len(batch) == 0 {
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(bw.ctx, 30*time.Second)
 	defer cancel()
@@ -142,21 +152,34 @@ func (bw *BatchWriter) flush() error {
 	duration := time.Since(start)
 
 	if err != nil {
-		if !bw.circuitBreaker.IsOpen() {
-			bw.buffer = append(batch, bw.buffer...)
-			log.Printf(
-				"Failed to insert batch of %d records: %v (will retry)",
-				len(batch), err,
-			)
+		if bw.circuitBreaker.IsOpen() {
+			log.Printf("Circuit breaker is open, dropping batch of %d records: %v", len(batch), err)
 		} else {
-			log.Printf(
-				"Circuit breaker is open, dropping batch of %d records: %v",
-				len(batch), err,
-			)
+			log.Printf("Failed to insert batch of %d records: %v (will retry)", len(batch), err)
 		}
 		return err
 	}
 
 	log.Printf("Successfully inserted batch of %d records in %v", len(batch), duration)
 	return nil
+}
+
+// requeueBatch adds failed items back to the buffer for retry
+func (bw *BatchWriter) requeueBatch(batch []*telemetry.Telemetry) {
+	if bw.circuitBreaker.IsOpen() {
+		// Don't requeue if circuit breaker is open
+		return
+	}
+
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	// Prepend batch to buffer (failed items should be processed first)
+	bw.buffer = append(batch, bw.buffer...)
+}
+
+func (bw *BatchWriter) BufferSize() int {
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+	return len(bw.buffer)
 }
