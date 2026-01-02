@@ -8,31 +8,27 @@ import (
 )
 
 type Telemetry struct {
-	DeviceID    uuid.UUID `gorm:"column:device_id;type:uuid;primaryKey;index:idx_device_time,priority:1"`
-	Time        time.Time `gorm:"column:time;primaryKey;index:idx_device_time,priority:2"`
-	HardwareUID uuid.UUID `gorm:"column:hardware_uid;type:uuid;primaryKey" json:"hardware_uid"`
+	DeviceID    uuid.UUID `json:"device_id"`
+	Time        time.Time `json:"time"`
+	HardwareUID uuid.UUID `json:"hardware_uid"`
 
-	Temperature *float64 `gorm:"column:temperature" json:"temperature,omitempty"`
-	Humidity    *float64 `gorm:"column:humidity" json:"humidity,omitempty"`
-	Pressure    *float64 `gorm:"column:pressure" json:"pressure,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	Humidity    *float64 `json:"humidity,omitempty"`
+	Pressure    *float64 `json:"pressure,omitempty"`
 
-	Latitude  *float64 `gorm:"column:latitude" json:"latitude,omitempty"`
-	Longitude *float64 `gorm:"column:longitude" json:"longitude,omitempty"`
-	Altitude  *float64 `gorm:"column:altitude" json:"altitude,omitempty"`
-	Speed     *float64 `gorm:"column:speed" json:"speed,omitempty"`
-	Heading   *float64 `gorm:"column:heading" json:"heading,omitempty"`
-	Accuracy  *float64 `gorm:"column:accuracy" json:"accuracy,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
+	Altitude  *float64 `json:"altitude,omitempty"`
+	Speed     *float64 `json:"speed,omitempty"`
+	Heading   *float64 `json:"heading,omitempty"`
+	Accuracy  *float64 `json:"accuracy,omitempty"`
 
-	BatteryLevel   *int  `gorm:"column:battery_level" json:"battery_level,omitempty"`
-	SignalStrength *int  `gorm:"column:signal_strength" json:"signal_strength,omitempty"`
-	IsMoving       *bool `gorm:"column:is_moving" json:"is_moving,omitempty"`
+	BatteryLevel   *int  `json:"battery_level,omitempty"`
+	SignalStrength *int  `json:"signal_strength,omitempty"`
+	IsMoving       *bool `json:"is_moving,omitempty"`
 
-	EventType  *string         `gorm:"column:event_type" json:"event_type,omitempty"`
-	RawPayload json.RawMessage `gorm:"column:raw_payload;type:jsonb" json:"raw_payload,omitempty"`
-}
-
-func (Telemetry) TableName() string {
-	return "device_telemetry"
+	EventType  *string         `json:"event_type,omitempty"`
+	RawPayload json.RawMessage `json:"raw_payload,omitempty"`
 }
 
 type Heartbeat struct {

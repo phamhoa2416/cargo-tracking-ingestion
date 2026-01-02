@@ -20,7 +20,7 @@ func Logger() gin.HandlerFunc {
 		clientIP := c.ClientIP()
 		method := c.Request.Method
 
-		log.Printf("[%s] %s %s %s %d %v",
+		log.Printf("[%s] ip=%s path=%s query=%s code=%d latency=%v",
 			method,
 			clientIP,
 			path,

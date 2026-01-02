@@ -16,24 +16,32 @@ type Client struct {
 func NewClient(config *config.DatabaseConfig) (*Client, error) {
 	poolConfig, err := pgxpool.ParseConfig(config.DSN())
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection string: %w", err)
+		return nil, fmt.Errorf("parse database DSN failed: %w", err)
 	}
 
 	poolConfig.MaxConns = int32(config.MaxOpenConns)
-	poolConfig.MinConns = int32(config.MaxIdleConns)
+	if config.MaxIdleConns > 0 {
+		if config.MaxIdleConns > config.MaxOpenConns {
+			poolConfig.MinConns = int32(config.MaxOpenConns)
+		} else {
+			poolConfig.MinConns = int32(config.MaxIdleConns)
+		}
+	}
 	poolConfig.MaxConnLifetime = config.ConnMaxLifetime
 	poolConfig.MaxConnIdleTime = config.ConnMaxIdleTime
+	poolConfig.HealthCheckPeriod = 1 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+		return nil, fmt.Errorf("create pgx pool failed: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := pool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		pool.Close()
+		return nil, fmt.Errorf("database ping failed: %w", err)
 	}
 
 	return &Client{pool: pool}, nil
@@ -50,5 +58,8 @@ func (c *Client) Close() {
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {
+	if c.pool == nil {
+		return fmt.Errorf("database pool not initialized")
+	}
 	return c.pool.Ping(ctx)
 }

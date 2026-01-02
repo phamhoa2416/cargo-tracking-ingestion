@@ -16,33 +16,39 @@ const (
 )
 
 type Config struct {
-	FailureThreshold int           // Number of failures before opening
-	SuccessThreshold int           // Number of successes in half-open to close
+	FailureThreshold uint32        // Number of failures before opening
+	SuccessThreshold uint32        // Number of successes in half-open to close
 	Timeout          time.Duration // Time to wait before attempting half-open
-	MaxRequests      int           // Max requests in half-open state
+	MaxRequests      uint32        // Max requests in half-open state
 }
 
 func DefaultConfig() Config {
 	return Config{
 		FailureThreshold: 5,
-		SuccessThreshold: 2,
-		Timeout:          30 * time.Second,
-		MaxRequests:      3,
+		SuccessThreshold: 3,
+		Timeout:          60 * time.Second,
+		MaxRequests:      1,
 	}
 }
 
 // CircuitBreaker implements the circuit breaker pattern
 type CircuitBreaker struct {
-	config       Config
-	state        State
-	failures     int
-	successes    int
-	halfOpenReqs int
-	lastFailure  time.Time
-	mu           sync.RWMutex
+	config           Config
+	state            State
+	failureCount     uint32
+	successCount     uint32
+	halfOpenRequests uint32
+	lastFailureTime  time.Time
+	mu               sync.RWMutex
 }
 
 func New(config Config) *CircuitBreaker {
+	if config.FailureThreshold == 0 {
+		config.FailureThreshold = DefaultConfig().FailureThreshold
+	}
+	if config.Timeout == 0 {
+		config.Timeout = DefaultConfig().Timeout
+	}
 	return &CircuitBreaker{
 		config: config,
 		state:  StateClosed,
@@ -50,35 +56,30 @@ func New(config Config) *CircuitBreaker {
 }
 
 func (cb *CircuitBreaker) Execute(ctx context.Context, fn func() error) error {
-	select {
-	case <-ctx.Done():
+	if ctx.Err() != nil {
 		return ctx.Err()
-	default:
 	}
 
 	cb.mu.Lock()
+	switch cb.state {
 
-	// Check if we should transition from open to half-open
-	if cb.state == StateOpen {
-		if time.Since(cb.lastFailure) >= cb.config.Timeout {
-			cb.state = StateHalfOpen
-			cb.halfOpenReqs = 0
-			cb.successes = 0
-		} else {
+	case StateOpen:
+		if time.Since(cb.lastFailureTime) < cb.config.Timeout {
 			cb.mu.Unlock()
-			return fmt.Errorf("circuit breaker half-open: max requests reached")
+			return fmt.Errorf("circuit breaker is open")
 		}
-	}
+		cb.state = StateHalfOpen
+		cb.halfOpenRequests = 0
+		cb.successCount = 0
 
-	// Check half-open request limit
-	if cb.state == StateHalfOpen {
-		if cb.halfOpenReqs >= cb.config.MaxRequests {
+	case StateHalfOpen:
+		if cb.halfOpenRequests >= cb.config.MaxRequests {
 			cb.mu.Unlock()
-			return fmt.Errorf("circuit breaker half-open request limit reached")
+			return fmt.Errorf("circuit breaker half-open: max requests limit reached")
 		}
-		cb.halfOpenReqs++
+		cb.halfOpenRequests++
+	default:
 	}
-
 	cb.mu.Unlock()
 
 	err := fn()
@@ -87,44 +88,31 @@ func (cb *CircuitBreaker) Execute(ctx context.Context, fn func() error) error {
 	defer cb.mu.Unlock()
 
 	if err != nil {
-		cb.onFailure()
+		cb.lastFailureTime = time.Now()
+		if cb.state == StateHalfOpen {
+			cb.state = StateOpen
+			cb.resetCounters()
+		} else if cb.state == StateClosed {
+			cb.failureCount++
+			if cb.failureCount >= cb.config.FailureThreshold {
+				cb.state = StateOpen
+				cb.resetCounters()
+			}
+		}
 		return err
 	}
 
-	cb.onSuccess()
-	return nil
-}
-
-func (cb *CircuitBreaker) onFailure() {
-	cb.failures++
-	cb.lastFailure = time.Now()
-
 	if cb.state == StateHalfOpen {
-		// Transition back to open on failure in half-open
-		cb.state = StateOpen
-		cb.halfOpenReqs = 0
-		cb.successes = 0
-	} else if cb.state == StateClosed && cb.failures >= cb.config.FailureThreshold {
-		// Transition to open if threshold reached
-		cb.state = StateOpen
-		cb.failures = 0
-	}
-}
-
-func (cb *CircuitBreaker) onSuccess() {
-	if cb.state == StateHalfOpen {
-		cb.successes++
-		if cb.successes >= cb.config.SuccessThreshold {
-			// Transition to closed
+		cb.successCount++
+		if cb.successCount >= cb.config.SuccessThreshold {
 			cb.state = StateClosed
-			cb.failures = 0
-			cb.successes = 0
-			cb.halfOpenReqs = 0
+			cb.resetCounters()
 		}
 	} else if cb.state == StateClosed {
-		// Reset failure count on success
-		cb.failures = 0
+		cb.failureCount = 0
 	}
+
+	return nil
 }
 
 func (cb *CircuitBreaker) State() State {
@@ -137,9 +125,14 @@ func (cb *CircuitBreaker) Reset() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.state = StateClosed
-	cb.failures = 0
-	cb.successes = 0
-	cb.halfOpenReqs = 0
+	cb.resetCounters()
+	cb.lastFailureTime = time.Time{}
+}
+
+func (cb *CircuitBreaker) resetCounters() {
+	cb.failureCount = 0
+	cb.successCount = 0
+	cb.halfOpenRequests = 0
 }
 
 func (cb *CircuitBreaker) IsOpen() bool {

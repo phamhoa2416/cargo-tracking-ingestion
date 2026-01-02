@@ -14,7 +14,6 @@ CREATE TABLE device_events
 
     acknowledged    BOOLEAN     NOT NULL DEFAULT false,
     acknowledged_at TIMESTAMPTZ,
-    acknowledged_by UUID,
 
     PRIMARY KEY (device_id, time, event_type)
 );

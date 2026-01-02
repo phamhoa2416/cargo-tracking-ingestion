@@ -15,7 +15,6 @@ const (
 	PoorSignal    Type = "POOR_SIGNAL"
 	GeofenceEnter Type = "GEOFENCE_ENTER"
 	GeofenceExit  Type = "GEOFENCE_EXIT"
-	TypeShock     Type = "SHOCK"
 	TempHigh      Type = "TEMP_HIGH"
 	TempLow       Type = "TEMP_LOW"
 	HumidityHigh  Type = "HUMIDITY_HIGH"
@@ -30,25 +29,20 @@ const (
 )
 
 type Event struct {
-	Time      time.Time `gorm:"column:time;primaryKey" json:"time"`
-	DeviceID  uuid.UUID `gorm:"column:device_id;type:uuid;primaryKey" json:"device_id"`
-	EventType Type      `gorm:"column:event_type;type:text;primaryKey" json:"event_type"`
+	Time       time.Time `json:"time"`
+	IngestedAt time.Time `json:"ingested_at"`
 
-	IngestedAt time.Time `gorm:"column:ingested_at;not null" json:"ingested_at"`
+	DeviceID    uuid.UUID  `json:"device_id"`
+	HardwareUID *uuid.UUID `json:"hardware_uid,omitempty"`
 
-	HardwareUID *uuid.UUID `gorm:"column:hardware_uid;type:uuid" json:"hardware_uid,omitempty"`
+	Type     Type     `json:"type"`
+	Severity Severity `json:"severity"`
 
-	Severity    Severity        `gorm:"column:severity;type:text;not null" json:"severity"`
-	Description *string         `gorm:"column:description" json:"description,omitempty"`
-	Metadata    json.RawMessage `gorm:"column:metadata;type:jsonb" json:"metadata,omitempty"`
+	Description *string         `json:"description,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
 
-	Acknowledged   bool       `gorm:"column:acknowledged;not null;default:false" json:"acknowledged"`
-	AcknowledgedAt *time.Time `gorm:"column:acknowledged_at" json:"acknowledged_at,omitempty"`
-	AcknowledgedBy *uuid.UUID `gorm:"column:acknowledged_by;type:uuid" json:"acknowledged_by,omitempty"`
-}
-
-func (Event) TableName() string {
-	return "device_events"
+	Acknowledged   bool       `json:"acknowledged"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
 }
 
 type QueryParams struct {
@@ -66,6 +60,8 @@ type List struct {
 	Events []Event `json:"events"`
 	Total  int     `json:"total"`
 }
+
+/* ---------- Metadata ---------- */
 
 type LowBatteryMetadata struct {
 	BatteryLevel int `json:"battery_level"`
@@ -96,7 +92,7 @@ func NewEvent(deviceID uuid.UUID, eventType Type, severity Severity) *Event {
 		Time:         now,
 		IngestedAt:   now,
 		DeviceID:     deviceID,
-		EventType:    eventType,
+		Type:         eventType,
 		Severity:     severity,
 		Acknowledged: false,
 	}
@@ -112,8 +108,8 @@ func (e *Event) WithDescription(desc string) *Event {
 	return e
 }
 
-func (e *Event) WithMetadata(metadata interface{}) (*Event, error) {
-	data, err := json.Marshal(metadata)
+func (e *Event) WithMetadata(v interface{}) (*Event, error) {
+	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +117,8 @@ func (e *Event) WithMetadata(metadata interface{}) (*Event, error) {
 	return e, nil
 }
 
-func (e *Event) Acknowledge(userID uuid.UUID) {
+func (e *Event) Acknowledge() {
 	now := time.Now()
 	e.Acknowledged = true
 	e.AcknowledgedAt = &now
-	e.AcknowledgedBy = &userID
 }

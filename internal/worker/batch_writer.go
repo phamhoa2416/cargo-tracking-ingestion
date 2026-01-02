@@ -8,20 +8,28 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type BatchWriter struct {
-	repo           *timescale.Repository
-	config         *config.WorkerConfig
-	buffer         []*telemetry.Telemetry
-	mu             sync.Mutex
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	flushSignal    chan struct{}
+	repo   *timescale.Repository
+	config *config.WorkerConfig
+
+	buffer []*telemetry.Telemetry
+	mu     sync.Mutex
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	flushSignal chan struct{}
+
 	circuitBreaker *resilience.CircuitBreaker
 	retryConfig    resilience.RetryConfig
+
+	stopped       atomic.Bool
+	maxBufferSize int
 }
 
 func NewBatchWriter(repo *timescale.Repository, config *config.WorkerConfig) *BatchWriter {
@@ -45,16 +53,21 @@ func NewBatchWriter(repo *timescale.Repository, config *config.WorkerConfig) *Ba
 		flushSignal:    make(chan struct{}, 1),
 		circuitBreaker: resilience.New(cbConfig),
 		retryConfig:    retryCfg,
+		maxBufferSize:  1000,
 	}
 }
 
 func (bw *BatchWriter) Start() {
 	bw.wg.Add(1)
 	go bw.run()
-	log.Println("Batch writer started")
+	log.Println("[batch-writer] started")
 }
 
 func (bw *BatchWriter) Stop() {
+	if bw.stopped.Swap(true) {
+		return
+	}
+
 	bw.cancel()
 	bw.wg.Wait()
 
@@ -63,22 +76,45 @@ func (bw *BatchWriter) Stop() {
 	remaining := bw.drainBuffer()
 	bw.mu.Unlock()
 
-	if len(remaining) > 0 {
-		if err := bw.flushBatch(remaining); err != nil {
-			log.Printf("Error flushing remaining data on shutdown: %v", err)
-		}
+	if len(remaining) == 0 {
+		return
 	}
 
-	log.Println("Batch writer stopped")
+	log.Printf("Flushing %d remaining telemetry records on shutdown...", len(remaining))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := bw.circuitBreaker.Execute(ctx, func() error {
+		return resilience.Do(ctx, bw.retryConfig, func() error {
+			return bw.repo.BatchInsertTelemetry(ctx, remaining)
+		})
+	})
+
+	if err != nil {
+		log.Printf("Failed to flush %d remaining records on shutdown: %v", len(remaining), err)
+	} else {
+		log.Printf("Successfully flushed %d remaining records on shutdown", len(remaining))
+	}
+
+	log.Println("BatchWriter stopped gracefully")
 }
 
 func (bw *BatchWriter) Add(t *telemetry.Telemetry) {
-	bw.mu.Lock()
-	bw.buffer = append(bw.buffer, t)
-	shouldFlush := len(bw.buffer) >= bw.config.BatchSize
-	bw.mu.Unlock()
+	if bw.stopped.Load() {
+		return
+	}
 
-	if shouldFlush {
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	if len(bw.buffer) >= bw.maxBufferSize {
+		log.Printf("Buffer full (%d/%d), dropping new telemetry record", len(bw.buffer), bw.maxBufferSize)
+		return
+	}
+
+	bw.buffer = append(bw.buffer, t)
+
+	if len(bw.buffer) >= bw.config.BatchSize {
 		select {
 		case bw.flushSignal <- struct{}{}:
 		default:
@@ -104,7 +140,6 @@ func (bw *BatchWriter) run() {
 	}
 }
 
-// drainBuffer extracts and clears the buffer. Must be called with mu held.
 func (bw *BatchWriter) drainBuffer() []*telemetry.Telemetry {
 	if len(bw.buffer) == 0 {
 		return nil
@@ -115,7 +150,6 @@ func (bw *BatchWriter) drainBuffer() []*telemetry.Telemetry {
 	return batch
 }
 
-// tryFlush attempts to flush the current buffer
 func (bw *BatchWriter) tryFlush() {
 	bw.mu.Lock()
 	batch := bw.drainBuffer()
@@ -126,56 +160,49 @@ func (bw *BatchWriter) tryFlush() {
 	}
 
 	if err := bw.flushBatch(batch); err != nil {
-		log.Printf("Error flushing batch: %v", err)
-		// Re-queue the failed batch
+		log.Printf("Failed to flush batch of %d records: %v", len(batch), err)
 		bw.requeueBatch(batch)
 	}
 }
 
-// flushBatch writes a batch to the database. Does NOT hold the mutex.
 func (bw *BatchWriter) flushBatch(batch []*telemetry.Telemetry) error {
-	if len(batch) == 0 {
-		return nil
-	}
-
 	ctx, cancel := context.WithTimeout(bw.ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
-
 	err := bw.circuitBreaker.Execute(ctx, func() error {
 		return resilience.Do(ctx, bw.retryConfig, func() error {
 			return bw.repo.BatchInsertTelemetry(ctx, batch)
 		})
 	})
 
-	duration := time.Since(start)
-
 	if err != nil {
 		if bw.circuitBreaker.IsOpen() {
-			log.Printf("Circuit breaker is open, dropping batch of %d records: %v", len(batch), err)
-		} else {
-			log.Printf("Failed to insert batch of %d records: %v (will retry)", len(batch), err)
+			log.Printf("Circuit breaker OPEN - dropping batch of %d records", len(batch))
 		}
 		return err
 	}
 
-	log.Printf("Successfully inserted batch of %d records in %v", len(batch), duration)
+	log.Printf("Inserted batch of %d records in %v", len(batch), time.Since(start))
 	return nil
 }
 
-// requeueBatch adds failed items back to the buffer for retry
 func (bw *BatchWriter) requeueBatch(batch []*telemetry.Telemetry) {
 	if bw.circuitBreaker.IsOpen() {
-		// Don't requeue if circuit breaker is open
+		log.Printf("Circuit breaker open - dropping failed batch of %d records", len(batch))
 		return
 	}
 
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
 
-	// Prepend batch to buffer (failed items should be processed first)
-	bw.buffer = append(batch, bw.buffer...)
+	newBuffer := append(batch, bw.buffer...)
+	if len(newBuffer) > bw.maxBufferSize {
+		dropped := len(newBuffer) - bw.maxBufferSize
+		newBuffer = newBuffer[dropped:]
+		log.Printf("Buffer overflow during requeue - dropped %d oldest failed records", dropped)
+	}
+	bw.buffer = newBuffer
 }
 
 func (bw *BatchWriter) BufferSize() int {

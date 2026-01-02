@@ -20,6 +20,19 @@ type EventDetector struct {
 	wg             sync.WaitGroup
 	circuitBreaker *resilience.CircuitBreaker
 	retryConfig    resilience.RetryConfig
+
+	prevState   map[string]deviceState
+	prevStateMu sync.RWMutex
+}
+
+type deviceState struct {
+	BatteryLevel   *int
+	SignalStrength *int
+	Temperature    *float64
+	Humidity       *float64
+	IsMoving       *bool
+	LastLowBattery time.Time
+	LastPoorSignal time.Time
 }
 
 func NewEventDetector(repo *timescale.Repository, workers int) *EventDetector {
@@ -30,18 +43,19 @@ func NewEventDetector(repo *timescale.Repository, workers int) *EventDetector {
 	retryCfg.InitialDelay = 500 * time.Millisecond
 	retryCfg.MaxDelay = 5 * time.Second
 
-	cbConfig := resilience.DefaultConfig()
-	cbConfig.FailureThreshold = 5
-	cbConfig.Timeout = 30 * time.Second
+	cbCfg := resilience.DefaultConfig()
+	cbCfg.FailureThreshold = 5
+	cbCfg.Timeout = 60 * time.Second
 
 	return &EventDetector{
 		repo:           repo,
-		eventChan:      make(chan *telemetry.Telemetry, 1000),
+		eventChan:      make(chan *telemetry.Telemetry, 2000),
 		workers:        workers,
 		ctx:            ctx,
 		cancel:         cancel,
-		circuitBreaker: resilience.New(cbConfig),
+		circuitBreaker: resilience.New(cbCfg),
 		retryConfig:    retryCfg,
+		prevState:      make(map[string]deviceState),
 	}
 }
 
@@ -50,28 +64,26 @@ func (ed *EventDetector) Start() {
 		ed.wg.Add(1)
 		go ed.worker(i)
 	}
-
-	log.Printf("Event detector started with %d workers", ed.workers)
+	log.Printf("EventDetector started with %d workers", ed.workers)
 }
 
 func (ed *EventDetector) Stop() {
 	ed.cancel()
 	close(ed.eventChan)
 	ed.wg.Wait()
-	log.Printf("Event detector stopped")
+	log.Println("EventDetector stopped gracefully")
 }
 
 func (ed *EventDetector) Process(t *telemetry.Telemetry) {
 	select {
 	case ed.eventChan <- t:
 	default:
-		log.Printf("Event channel full, dropping telemetry for device %s", t.DeviceID)
+		log.Printf("WARNING: EventDetector channel full, dropping telemetry from device %s", t.DeviceID)
 	}
 }
 
 func (ed *EventDetector) worker(id int) {
 	defer ed.wg.Done()
-
 	for {
 		select {
 		case <-ed.ctx.Done():
@@ -87,15 +99,13 @@ func (ed *EventDetector) worker(id int) {
 
 func (ed *EventDetector) detectAndSave(t *telemetry.Telemetry) {
 	events := ed.detectEvents(t)
-
 	if len(events) == 0 {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ed.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ed.ctx, 15*time.Second)
 	defer cancel()
 
-	// Use circuit breaker and retry
 	err := ed.circuitBreaker.Execute(ctx, func() error {
 		return resilience.Do(ctx, ed.retryConfig, func() error {
 			return ed.repo.BatchInsertEvents(ctx, events)
@@ -104,73 +114,87 @@ func (ed *EventDetector) detectAndSave(t *telemetry.Telemetry) {
 
 	if err != nil {
 		if ed.circuitBreaker.IsOpen() {
-			log.Printf("Circuit breaker is open, dropping %d events for device %s: %v", len(events), t.DeviceID, err)
+			log.Printf("Circuit breaker OPEN - dropped %d events for device %s", len(events), t.DeviceID)
 		} else {
-			log.Printf("Failed to insert events for device %s after retries: %v", t.DeviceID, err)
+			log.Printf("Failed to save %d events for device %s: %v", len(events), t.DeviceID, err)
 		}
 	} else {
-		log.Printf("Detected and saved %d events for device %s", len(events), t.DeviceID)
+		log.Printf("Saved %d events for device %s", len(events), t.DeviceID)
 	}
 }
 
 func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 	var events []*event.Event
+	deviceKey := t.DeviceID.String()
+
+	ed.prevStateMu.RLock()
+	prev, exists := ed.prevState[deviceKey]
+	ed.prevStateMu.RUnlock()
+
+	now := time.Now()
 
 	// Low battery detection
+	lastLowBattery := prev.LastLowBattery
 	if t.BatteryLevel != nil && *t.BatteryLevel < 20 {
-		e := event.NewEvent(t.DeviceID, event.LowBattery, event.SeverityWarning)
-		e.WithHardwareUID(t.HardwareUID)
-		e.WithDescription("Device battery is low")
-
-		metadata := event.LowBatteryMetadata{
-			BatteryLevel: *t.BatteryLevel,
-			Threshold:    20,
-		}
-		if e, err := e.WithMetadata(metadata); err == nil {
-			events = append(events, e)
+		if !exists || prev.BatteryLevel == nil || *prev.BatteryLevel >= 20 ||
+			now.Sub(prev.LastLowBattery) > 30*time.Minute {
+			e := event.NewEvent(t.DeviceID, event.LowBattery, event.SeverityWarning).
+				WithHardwareUID(t.HardwareUID).
+				WithDescription("Device battery low")
+			if e, _ := e.WithMetadata(event.LowBatteryMetadata{
+				BatteryLevel: *t.BatteryLevel,
+				Threshold:    20,
+			}); e != nil {
+				e.Time = t.Time
+				events = append(events, e)
+				lastLowBattery = now
+			}
 		}
 	}
 
 	// Poor signal detection
+	lastPoorSignal := prev.LastPoorSignal
 	if t.SignalStrength != nil && *t.SignalStrength < -80 {
-		e := event.NewEvent(t.DeviceID, event.PoorSignal, event.SeverityWarning)
-		e.WithHardwareUID(t.HardwareUID)
-		e.WithDescription("Device signal strength is low")
-		metadata := event.SignalMetadata{
-			SignalStrength: *t.SignalStrength,
-			Threshold:      -80,
-		}
-		if e, err := e.WithMetadata(metadata); err == nil {
-			events = append(events, e)
+		if !exists || prev.SignalStrength == nil || *prev.SignalStrength >= -80 ||
+			now.Sub(prev.LastPoorSignal) > 15*time.Minute {
+			e := event.NewEvent(t.DeviceID, event.PoorSignal, event.SeverityWarning).
+				WithHardwareUID(t.HardwareUID).
+				WithDescription("Poor signal strength")
+			if e, _ := e.WithMetadata(event.SignalMetadata{
+				SignalStrength: *t.SignalStrength,
+				Threshold:      -80,
+			}); e != nil {
+				e.Time = t.Time
+				events = append(events, e)
+				lastPoorSignal = now
+			}
 		}
 	}
 
 	// Temperature alerts
 	if t.Temperature != nil {
 		if *t.Temperature > 36.0 {
-			e := event.NewEvent(t.DeviceID, event.TempHigh, event.SeverityCritical)
-			e.WithHardwareUID(t.HardwareUID)
-			e.WithDescription("Temperature exceeds safe threshold")
-
-			metadata := event.TemperatureMetadata{
+			e := event.NewEvent(t.DeviceID, event.TempHigh, event.SeverityCritical).
+				WithHardwareUID(t.HardwareUID).
+				WithDescription("High temperature detected")
+			if e, _ := e.WithMetadata(event.TemperatureMetadata{
 				Temperature: *t.Temperature,
 				Threshold:   36.0,
 				Unit:        "celsius",
-			}
-			if e, err := e.WithMetadata(metadata); err == nil {
+			}); e != nil {
+				e.Time = t.Time
 				events = append(events, e)
 			}
 		} else if *t.Temperature < 0.0 {
-			e := event.NewEvent(t.DeviceID, event.TempLow, event.SeverityCritical)
-			e.WithHardwareUID(t.HardwareUID)
-			e.WithDescription("Temperature below safe threshold")
-
-			metadata := event.TemperatureMetadata{
+			e := event.NewEvent(t.DeviceID, event.TempLow, event.SeverityCritical).
+				WithHardwareUID(t.HardwareUID).
+				WithDescription("Low temperature detected")
+			if e, _ := e.WithMetadata(event.TemperatureMetadata{
 				Temperature: *t.Temperature,
 				Threshold:   0.0,
 				Unit:        "celsius",
-			}
-			if e, err := e.WithMetadata(metadata); err == nil {
+			}); e != nil {
+				e.Time = t.Time
 				events = append(events, e)
 			}
 		}
@@ -178,29 +202,42 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 
 	// Humidity alert
 	if t.Humidity != nil && *t.Humidity > 80.0 {
-		e := event.NewEvent(t.DeviceID, event.HumidityHigh, event.SeverityWarning)
-		e.WithHardwareUID(t.HardwareUID)
-		e.WithDescription("Humidity exceeds safe threshold")
+		e := event.NewEvent(t.DeviceID, event.HumidityHigh, event.SeverityWarning).
+			WithHardwareUID(t.HardwareUID).
+			WithDescription("High humidity detected")
+		e.Time = t.Time
 		events = append(events, e)
 	}
 
 	if t.IsMoving != nil {
-		if *t.IsMoving {
-			e := event.NewEvent(t.DeviceID, event.Moving, event.SeverityInfo)
-			e.WithHardwareUID(t.HardwareUID)
-			e.WithDescription("Device started moving")
-			events = append(events, e)
-		} else {
-			e := event.NewEvent(t.DeviceID, event.Stopped, event.SeverityInfo)
-			e.WithHardwareUID(t.HardwareUID)
-			e.WithDescription("Device stopped moving")
-			events = append(events, e)
+		if !exists || prev.IsMoving == nil || *prev.IsMoving != *t.IsMoving {
+			if *t.IsMoving {
+				e := event.NewEvent(t.DeviceID, event.Moving, event.SeverityInfo).
+					WithHardwareUID(t.HardwareUID).
+					WithDescription("Device started moving")
+				e.Time = t.Time
+				events = append(events, e)
+			} else {
+				e := event.NewEvent(t.DeviceID, event.Stopped, event.SeverityInfo).
+					WithHardwareUID(t.HardwareUID).
+					WithDescription("Device stopped moving")
+				e.Time = t.Time
+				events = append(events, e)
+			}
 		}
 	}
 
-	for _, e := range events {
-		e.Time = t.Time
+	ed.prevStateMu.Lock()
+	ed.prevState[deviceKey] = deviceState{
+		BatteryLevel:   t.BatteryLevel,
+		SignalStrength: t.SignalStrength,
+		Temperature:    t.Temperature,
+		Humidity:       t.Humidity,
+		IsMoving:       t.IsMoving,
+		LastLowBattery: lastLowBattery,
+		LastPoorSignal: lastPoorSignal,
 	}
+	ed.prevStateMu.Unlock()
 
 	return events
 }

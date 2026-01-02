@@ -25,8 +25,6 @@ type ServerConfig struct {
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	ShutdownTimeout time.Duration
-	EnableGRPC      bool
-	GRPCPort        int
 }
 type DatabaseConfig struct {
 	Host            string
@@ -43,7 +41,6 @@ type DatabaseConfig struct {
 type RedisConfig struct {
 	Host         string
 	Port         int
-	Password     string
 	DB           int
 	PoolSize     int
 	MinIdleConns int
@@ -114,8 +111,6 @@ func Load() (*Config, error) {
 			ReadTimeout:     viper.GetDuration("SERVER_READ_TIMEOUT"),
 			WriteTimeout:    viper.GetDuration("SERVER_WRITE_TIMEOUT"),
 			ShutdownTimeout: viper.GetDuration("SERVER_SHUTDOWN_TIMEOUT"),
-			EnableGRPC:      viper.GetBool("ENABLE_GRPC"),
-			GRPCPort:        viper.GetInt("GRPC_PORT"),
 		},
 		Database: DatabaseConfig{
 			Host:            viper.GetString("DATABASE_HOST"),
@@ -156,12 +151,12 @@ func Load() (*Config, error) {
 			ConnectTimeout:    viper.GetDuration("MQTT_CONNECT_TIMEOUT"),
 			AutoReconnect:     viper.GetBool("MQTT_AUTO_RECONNECT"),
 			MaxReconnectDelay: viper.GetDuration("MQTT_MAX_RECONNECT_DELAY"),
-			TelemetryTopic:    viper.GetString("MQTT_TELEMETRIC_TOPIC"),
+			TelemetryTopic:    viper.GetString("MQTT_TELEMETRY_TOPIC"),
 			HeartbeatTopic:    viper.GetString("MQTT_HEARTBEAT_TOPIC"),
 			CommandTopic:      viper.GetString("MQTT_COMMAND_TOPIC"),
 		},
 		JWT: JWTConfig{
-			PublicKeyPath: viper.GetString("JWT_PUBLIC_KEY"),
+			PublicKeyPath: viper.GetString("JWT_PUBLIC_KEY_PATH"),
 			Issuer:        viper.GetString("JWT_ISSUER"),
 			Audience:      viper.GetString("JWT_AUDIENCE"),
 		},
@@ -180,6 +175,17 @@ func Load() (*Config, error) {
 	return config, nil
 }
 
+func (c *Config) Validate() error {
+	if c.Server.Port <= 0 {
+		return errors.New("invalid server port")
+	}
+	if c.Worker.BatchSize <= 0 {
+		return errors.New("invalid worker batch size")
+	}
+
+	return nil
+}
+
 func (c *DatabaseConfig) DSN() string {
 	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
@@ -190,12 +196,4 @@ func (c *DatabaseConfig) DSN() string {
 		c.DBName,
 		c.SSLMode,
 	)
-}
-
-func (c *Config) GetRedisAddr() string {
-	return fmt.Sprintf("%s:%d", c.Redis.Host, c.Redis.Port)
-}
-
-func (c *Config) GetMQTTBroker() string {
-	return fmt.Sprintf("tcp://%s:%d", c.MQTT.Broker, c.MQTT.Port)
 }

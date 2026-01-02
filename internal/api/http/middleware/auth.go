@@ -37,48 +37,34 @@ func NewJwtValidator(publicKeyPath, issuer, audience string) (*JwtValidator, err
 func (j *JwtValidator) Validate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.AbortWithStatusJSON(401, gin.H{"error": "missing Authorization header"})
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid Authorization header"})
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header format"})
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+		claims := &jwt.RegisteredClaims{}
+		token, err := jwt.ParseWithClaims(
+			tokenString,
+			claims,
+			func(token *jwt.Token) (interface{}, error) {
+				if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+					return nil, fmt.Errorf("unexpected signing method")
+				}
+				return j.publicKey, nil
+			},
+			jwt.WithIssuer(j.issuer),
+			jwt.WithAudience(j.audience),
+		)
+
+		if err != nil || !token.Valid {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
 		}
 
-		tokenString := parts[1]
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return j.publicKey, nil
-		})
-
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-			return
-		}
-
-		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-			if iss, ok := claims["iss"].(string); !ok || iss != j.issuer {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid issuer"})
-				return
-			}
-
-			if aud, ok := claims["aud"].(string); !ok || aud != j.audience {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid audience"})
-				return
-			}
-
-			c.Set("claims", claims)
-			c.Set("user_id", claims["sub"])
-		} else {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token claims"})
-			return
-		}
-
+		c.Set("claims", claims)
+		c.Set("user_id", claims.Subject)
 		c.Next()
 	}
 }
