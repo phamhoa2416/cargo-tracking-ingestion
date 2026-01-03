@@ -26,17 +26,21 @@ func ValidateTelemetry(t *telemetry.Telemetry) error {
 	}
 
 	// Validate GPS coordinates if provided
-	if (t.Latitude != nil && t.Longitude == nil) ||
-		(t.Latitude == nil && t.Longitude != nil) {
+	if t.Latitude != nil || t.Longitude != nil {
+		// Both must be provided together
+		if t.Latitude == nil || t.Longitude == nil {
+			return fmt.Errorf("latitude and longitude must be provided together")
+		}
+
+		// Validate latitude range
 		if *t.Latitude < -90 || *t.Latitude > 90 {
 			return fmt.Errorf("latitude must be between -90 and 90")
 		}
 
+		// Validate longitude range
 		if *t.Longitude < -180 || *t.Longitude > 180 {
 			return fmt.Errorf("longitude must be between -180 and 180")
 		}
-
-		return fmt.Errorf("latitude and longitude must be provided together")
 	}
 
 	// Validate temperature if provided

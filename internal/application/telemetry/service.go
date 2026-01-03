@@ -60,18 +60,20 @@ func (s *Service) IngestTelemetry(ctx context.Context, t *telemetry.Telemetry) e
 
 func (s *Service) updateCacheAndPublish(ctx context.Context, t *telemetry.Telemetry) {
 	if t.Latitude != nil && t.Longitude != nil {
-		location := &redis.DeviceLocation{
-			DeviceID:  t.DeviceID,
-			Latitude:  *t.Latitude,
-			Longitude: *t.Longitude,
-			Altitude:  t.Altitude,
-			Speed:     t.Speed,
-			Heading:   t.Heading,
-			Accuracy:  t.Accuracy,
-			Timestamp: t.Time,
-		}
-		if err := s.cache.SetDeviceLocation(ctx, location); err != nil {
-			log.Printf("Failed to cache device location: %v", err)
+		if s.cache != nil {
+			location := &redis.DeviceLocation{
+				DeviceID:  t.DeviceID,
+				Latitude:  *t.Latitude,
+				Longitude: *t.Longitude,
+				Altitude:  t.Altitude,
+				Speed:     t.Speed,
+				Heading:   t.Heading,
+				Accuracy:  t.Accuracy,
+				Timestamp: t.Time,
+			}
+			if err := s.cache.SetDeviceLocation(ctx, location); err != nil {
+				log.Printf("Failed to cache device location: %v", err)
+			}
 		}
 
 		if s.publisher != nil {
@@ -88,16 +90,18 @@ func (s *Service) updateCacheAndPublish(ctx context.Context, t *telemetry.Teleme
 		}
 	}
 
-	status := &redis.DeviceStatus{
-		DeviceID:       t.DeviceID,
-		IsOnline:       true,
-		BatteryLevel:   t.BatteryLevel,
-		SignalStrength: t.SignalStrength,
-		IsMoving:       t.IsMoving,
-		LastHeartbeat:  t.Time,
-	}
-	if err := s.cache.SetDeviceStatus(ctx, status); err != nil {
-		log.Printf("Failed to cache device status: %v", err)
+	if s.cache != nil {
+		status := &redis.DeviceStatus{
+			DeviceID:       t.DeviceID,
+			IsOnline:       true,
+			BatteryLevel:   t.BatteryLevel,
+			SignalStrength: t.SignalStrength,
+			IsMoving:       t.IsMoving,
+			LastHeartbeat:  t.Time,
+		}
+		if err := s.cache.SetDeviceStatus(ctx, status); err != nil {
+			log.Printf("Failed to cache device status: %v", err)
+		}
 	}
 
 	if s.pubsub != nil {
