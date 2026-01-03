@@ -2,7 +2,7 @@
 
 APP_NAME=cargo-tracking-ingestion
 VERSION=1.0.0
-GO_VERSION=1.24
+GO_VERSION=1.24.0
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
