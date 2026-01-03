@@ -1,14 +1,14 @@
 package telemetry
 
 import (
-	telemetry2 "cargo-tracking-ingestion/internal/domain/telemetry"
+	"cargo-tracking-ingestion/internal/domain/telemetry"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-func ValidateTelemetry(t *telemetry2.Telemetry) error {
+func ValidateTelemetry(t *telemetry.Telemetry) error {
 	if t.DeviceID == uuid.Nil {
 		return fmt.Errorf("device_id is required and cannot be zero UUID")
 	}
@@ -26,16 +26,17 @@ func ValidateTelemetry(t *telemetry2.Telemetry) error {
 	}
 
 	// Validate GPS coordinates if provided
-	if t.Latitude != nil {
+	if (t.Latitude != nil && t.Longitude == nil) ||
+		(t.Latitude == nil && t.Longitude != nil) {
 		if *t.Latitude < -90 || *t.Latitude > 90 {
 			return fmt.Errorf("latitude must be between -90 and 90")
 		}
-	}
 
-	if t.Longitude != nil {
 		if *t.Longitude < -180 || *t.Longitude > 180 {
 			return fmt.Errorf("longitude must be between -180 and 180")
 		}
+
+		return fmt.Errorf("latitude and longitude must be provided together")
 	}
 
 	// Validate temperature if provided
@@ -83,8 +84,7 @@ func ValidateTelemetry(t *telemetry2.Telemetry) error {
 	return nil
 }
 
-func ValidateHeartbeat(h *telemetry2.Heartbeat) error {
-	// Validate UUIDs - check for zero UUID
+func ValidateHeartbeat(h *telemetry.Heartbeat) error {
 	if h.DeviceID == uuid.Nil {
 		return fmt.Errorf("device_id is required and cannot be zero UUID")
 	}

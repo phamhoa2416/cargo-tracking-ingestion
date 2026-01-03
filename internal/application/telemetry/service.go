@@ -2,7 +2,7 @@ package telemetry
 
 import (
 	"cargo-tracking-ingestion/internal/domain/telemetry"
-	"cargo-tracking-ingestion/internal/infrastructure/timescale"
+	repo "cargo-tracking-ingestion/internal/infrastructure/timescale/telemetry"
 	"cargo-tracking-ingestion/internal/worker"
 	"context"
 	"fmt"
@@ -12,13 +12,13 @@ import (
 )
 
 type Service struct {
-	repo          *timescale.Repository
+	repo          *repo.Repository
 	batchWriter   *worker.BatchWriter
 	eventDetector *worker.EventDetector
 }
 
 func NewService(
-	repo *timescale.Repository,
+	repo *repo.Repository,
 	batchWriter *worker.BatchWriter,
 	eventDetector *worker.EventDetector,
 ) *Service {
@@ -30,12 +30,12 @@ func NewService(
 }
 
 func (s *Service) IngestTelemetry(ctx context.Context, t *telemetry.Telemetry) error {
-	if err := ValidateTelemetry(t); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
-
 	if t.Time.IsZero() {
 		t.Time = time.Now()
+	}
+
+	if err := ValidateTelemetry(t); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
 	}
 
 	s.batchWriter.Add(t)
@@ -44,23 +44,23 @@ func (s *Service) IngestTelemetry(ctx context.Context, t *telemetry.Telemetry) e
 	return nil
 }
 
-func (s *Service) IngestTelemetryBatch(ctx context.Context, batch *[]telemetry.Telemetry) error {
-	if len(*batch) == 0 {
+func (s *Service) IngestTelemetryBatch(ctx context.Context, batch []telemetry.Telemetry) error {
+	if len(batch) == 0 {
 		return fmt.Errorf("empty batch")
 	}
 
-	if len(*batch) > 100 {
+	if len(batch) > 100 {
 		return fmt.Errorf("batch size exceeds limit of 100")
 	}
 
-	for i := range *batch {
-		t := &(*batch)[i]
-		if err := ValidateTelemetry(t); err != nil {
-			return fmt.Errorf("validation failed at index %d: %w", i, err)
-		}
-
+	for i := range batch {
+		t := &(batch)[i]
 		if t.Time.IsZero() {
 			t.Time = time.Now()
+		}
+
+		if err := ValidateTelemetry(t); err != nil {
+			return fmt.Errorf("validation failed at index %d: %w", i, err)
 		}
 
 		s.batchWriter.Add(t)

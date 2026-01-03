@@ -3,7 +3,7 @@ package worker
 import (
 	"cargo-tracking-ingestion/internal/config"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
-	"cargo-tracking-ingestion/internal/infrastructure/timescale"
+	repo "cargo-tracking-ingestion/internal/infrastructure/timescale/telemetry"
 	"cargo-tracking-ingestion/internal/resilience"
 	"context"
 	"log"
@@ -13,7 +13,7 @@ import (
 )
 
 type BatchWriter struct {
-	repo   *timescale.Repository
+	repo   *repo.Repository
 	config *config.WorkerConfig
 
 	buffer []*telemetry.Telemetry
@@ -32,7 +32,7 @@ type BatchWriter struct {
 	maxBufferSize int
 }
 
-func NewBatchWriter(repo *timescale.Repository, config *config.WorkerConfig) *BatchWriter {
+func NewBatchWriter(repo *repo.Repository, config *config.WorkerConfig) *BatchWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	retryCfg := resilience.DefaultRetryConfig()

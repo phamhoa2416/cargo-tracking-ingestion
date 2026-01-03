@@ -1,33 +1,31 @@
 package handler
 
 import (
-	telemetryService "cargo-tracking-ingestion/internal/application/telemetry"
+	service "cargo-tracking-ingestion/internal/application/telemetry"
 	"cargo-tracking-ingestion/internal/domain/event"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
 	"context"
-	"net/http"
-	"time"
-
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"net/http"
 )
 
 type TelemetryHandler struct {
-	telemetryService *telemetryService.Service
-	eventRepository  interface {
+	service         *service.Service
+	eventRepository interface {
 		GetEvents(ctx context.Context, params *event.QueryParams) (*event.List, error)
 	}
 }
 
 func NewTelemetryHandler(
-	telemetryService *telemetryService.Service,
+	service *service.Service,
 	eventRepo interface {
 		GetEvents(ctx context.Context, params *event.QueryParams) (*event.List, error)
 	},
 ) *TelemetryHandler {
 	return &TelemetryHandler{
-		telemetryService: telemetryService,
-		eventRepository:  eventRepo,
+		service:         service,
+		eventRepository: eventRepo,
 	}
 }
 
@@ -38,7 +36,7 @@ func (h *TelemetryHandler) IngestTelemetry(c *gin.Context) {
 		return
 	}
 
-	if err := h.telemetryService.IngestTelemetry(c.Request.Context(), &t); err != nil {
+	if err := h.service.IngestTelemetry(c.Request.Context(), &t); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -57,7 +55,7 @@ func (h *TelemetryHandler) IngestBatch(c *gin.Context) {
 		return
 	}
 
-	if err := h.telemetryService.IngestTelemetryBatch(c.Request.Context(), &batch); err != nil {
+	if err := h.service.IngestTelemetryBatch(c.Request.Context(), batch); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -75,7 +73,7 @@ func (h *TelemetryHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	if err := h.telemetryService.RecordHeartbeat(c.Request.Context(), &hb); err != nil {
+	if err := h.service.RecordHeartbeat(c.Request.Context(), &hb); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -88,14 +86,13 @@ func (h *TelemetryHandler) Heartbeat(c *gin.Context) {
 }
 
 func (h *TelemetryHandler) GetLatestLocation(c *gin.Context) {
-	deviceId := c.Param("id")
-	deviceID, err := uuid.Parse(deviceId)
+	deviceID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
 		return
 	}
 
-	location, err := h.telemetryService.GetLatestLocation(c.Request.Context(), deviceID)
+	location, err := h.service.GetLatestLocation(c.Request.Context(), deviceID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -110,8 +107,7 @@ func (h *TelemetryHandler) GetLatestLocation(c *gin.Context) {
 }
 
 func (h *TelemetryHandler) GetLocationHistory(c *gin.Context) {
-	deviceId := c.Param("id")
-	deviceID, err := uuid.Parse(deviceId)
+	deviceID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
 		return
@@ -120,24 +116,12 @@ func (h *TelemetryHandler) GetLocationHistory(c *gin.Context) {
 	var params telemetry.LocationQueryParams
 	params.DeviceID = deviceID
 
-	if startTime := c.Query("start_time"); startTime != "" {
-		if t, err := time.Parse(time.RFC3339, startTime); err == nil {
-			params.StartTime = t
-		}
-	}
-
-	if endTime := c.Query("end_time"); endTime != "" {
-		if t, err := time.Parse(time.RFC3339, endTime); err == nil {
-			params.EndTime = t
-		}
-	}
-
 	if err := c.ShouldBindQuery(&params); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	history, err := h.telemetryService.GetLocationHistory(c.Request.Context(), &params)
+	history, err := h.service.GetLocationHistory(c.Request.Context(), &params)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -147,8 +131,7 @@ func (h *TelemetryHandler) GetLocationHistory(c *gin.Context) {
 }
 
 func (h *TelemetryHandler) GetDeviceEvents(c *gin.Context) {
-	deviceId := c.Param("id")
-	deviceID, err := uuid.Parse(deviceId)
+	deviceID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
 		return
@@ -156,38 +139,6 @@ func (h *TelemetryHandler) GetDeviceEvents(c *gin.Context) {
 
 	var params event.QueryParams
 	params.DeviceID = deviceID
-	params.Limit = 100
-
-	// Parse query parameters
-	if startTime := c.Query("start_time"); startTime != "" {
-		if t, err := time.Parse(time.RFC3339, startTime); err == nil {
-			params.StartTime = t
-		} else {
-			params.StartTime = time.Now().Add(-24 * time.Hour)
-		}
-	} else {
-		params.StartTime = time.Now().Add(-24 * time.Hour)
-	}
-
-	if endTime := c.Query("end_time"); endTime != "" {
-		if t, err := time.Parse(time.RFC3339, endTime); err == nil {
-			params.EndTime = t
-		} else {
-			params.EndTime = time.Now()
-		}
-	} else {
-		params.EndTime = time.Now()
-	}
-
-	if eventType := c.Query("event_type"); eventType != "" {
-		et := event.Type(eventType)
-		params.EventType = &et
-	}
-
-	if severity := c.Query("severity"); severity != "" {
-		s := event.Severity(severity)
-		params.Severity = &s
-	}
 
 	if err := c.ShouldBindQuery(&params); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

@@ -23,11 +23,6 @@ func NewRateLimiter(requestsPerSecond float64, burst int) *RateLimiter {
 func (rl *RateLimiter) Limit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := c.ClientIP()
-		if userID, exists := c.Get("user_id"); exists {
-			if uid, ok := userID.(string); ok && uid != "" {
-				key = "user:" + uid
-			}
-		}
 
 		limiterI, _ := rl.limiters.LoadOrStore(key, rate.NewLimiter(rl.rate, rl.burst))
 		limiter := limiterI.(*rate.Limiter)

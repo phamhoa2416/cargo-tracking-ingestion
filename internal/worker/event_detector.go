@@ -3,7 +3,7 @@ package worker
 import (
 	"cargo-tracking-ingestion/internal/domain/event"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
-	"cargo-tracking-ingestion/internal/infrastructure/timescale"
+	repo "cargo-tracking-ingestion/internal/infrastructure/timescale/telemetry"
 	"cargo-tracking-ingestion/internal/resilience"
 	"context"
 	"log"
@@ -12,7 +12,7 @@ import (
 )
 
 type EventDetector struct {
-	repo           *timescale.Repository
+	repo           *repo.Repository
 	eventChan      chan *telemetry.Telemetry
 	workers        int
 	ctx            context.Context
@@ -31,11 +31,9 @@ type deviceState struct {
 	Temperature    *float64
 	Humidity       *float64
 	IsMoving       *bool
-	LastLowBattery time.Time
-	LastPoorSignal time.Time
 }
 
-func NewEventDetector(repo *timescale.Repository, workers int) *EventDetector {
+func NewEventDetector(repo *repo.Repository, workers int) *EventDetector {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	retryCfg := resilience.DefaultRetryConfig()
@@ -131,13 +129,9 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 	prev, exists := ed.prevState[deviceKey]
 	ed.prevStateMu.RUnlock()
 
-	now := time.Now()
-
-	// Low battery detection
-	lastLowBattery := prev.LastLowBattery
+	// Low battery detection - create event if battery is low
 	if t.BatteryLevel != nil && *t.BatteryLevel < 20 {
-		if !exists || prev.BatteryLevel == nil || *prev.BatteryLevel >= 20 ||
-			now.Sub(prev.LastLowBattery) > 30*time.Minute {
+		if !exists || prev.BatteryLevel == nil || *prev.BatteryLevel >= 20 {
 			e := event.NewEvent(t.DeviceID, event.LowBattery, event.SeverityWarning).
 				WithHardwareUID(t.HardwareUID).
 				WithDescription("Device battery low")
@@ -147,16 +141,13 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 			}); e != nil {
 				e.Time = t.Time
 				events = append(events, e)
-				lastLowBattery = now
 			}
 		}
 	}
 
-	// Poor signal detection
-	lastPoorSignal := prev.LastPoorSignal
+	// Poor signal detection - create event if signal is poor
 	if t.SignalStrength != nil && *t.SignalStrength < -80 {
-		if !exists || prev.SignalStrength == nil || *prev.SignalStrength >= -80 ||
-			now.Sub(prev.LastPoorSignal) > 15*time.Minute {
+		if !exists || prev.SignalStrength == nil || *prev.SignalStrength >= -80 {
 			e := event.NewEvent(t.DeviceID, event.PoorSignal, event.SeverityWarning).
 				WithHardwareUID(t.HardwareUID).
 				WithDescription("Poor signal strength")
@@ -166,7 +157,6 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 			}); e != nil {
 				e.Time = t.Time
 				events = append(events, e)
-				lastPoorSignal = now
 			}
 		}
 	}
@@ -234,8 +224,6 @@ func (ed *EventDetector) detectEvents(t *telemetry.Telemetry) []*event.Event {
 		Temperature:    t.Temperature,
 		Humidity:       t.Humidity,
 		IsMoving:       t.IsMoving,
-		LastLowBattery: lastLowBattery,
-		LastPoorSignal: lastPoorSignal,
 	}
 	ed.prevStateMu.Unlock()
 

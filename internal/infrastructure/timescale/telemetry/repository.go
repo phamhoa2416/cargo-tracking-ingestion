@@ -1,8 +1,9 @@
-package timescale
+package telemetry
 
 import (
 	"cargo-tracking-ingestion/internal/domain/event"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
+	"cargo-tracking-ingestion/internal/infrastructure/timescale"
 	"context"
 	"errors"
 	"fmt"
@@ -13,10 +14,10 @@ import (
 )
 
 type Repository struct {
-	client *Client
+	client *timescale.Client
 }
 
-func NewRepository(client *Client) *Repository {
+func NewRepository(client *timescale.Client) *Repository {
 	return &Repository{client: client}
 }
 
