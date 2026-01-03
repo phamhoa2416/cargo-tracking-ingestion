@@ -3,6 +3,8 @@ package worker
 import (
 	"cargo-tracking-ingestion/internal/domain/event"
 	"cargo-tracking-ingestion/internal/domain/telemetry"
+	"cargo-tracking-ingestion/internal/infrastructure/rabbitmq"
+	"cargo-tracking-ingestion/internal/infrastructure/redis"
 	repo "cargo-tracking-ingestion/internal/infrastructure/timescale/telemetry"
 	"cargo-tracking-ingestion/internal/resilience"
 	"context"
@@ -23,6 +25,9 @@ type EventDetector struct {
 
 	prevState   map[string]deviceState
 	prevStateMu sync.RWMutex
+
+	rmqPublisher *rabbitmq.Publisher
+	redisPubsub  *redis.PubSub
 }
 
 type deviceState struct {
@@ -33,7 +38,7 @@ type deviceState struct {
 	IsMoving       *bool
 }
 
-func NewEventDetector(repo *repo.Repository, workers int) *EventDetector {
+func NewEventDetector(repo *repo.Repository, workers int, rmqPublisher *rabbitmq.Publisher, redisPubsub *redis.PubSub) *EventDetector {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	retryCfg := resilience.DefaultRetryConfig()
@@ -54,6 +59,8 @@ func NewEventDetector(repo *repo.Repository, workers int) *EventDetector {
 		circuitBreaker: resilience.New(cbCfg),
 		retryConfig:    retryCfg,
 		prevState:      make(map[string]deviceState),
+		rmqPublisher:   rmqPublisher,
+		redisPubsub:    redisPubsub,
 	}
 }
 
@@ -118,6 +125,35 @@ func (ed *EventDetector) detectAndSave(t *telemetry.Telemetry) {
 		}
 	} else {
 		log.Printf("Saved %d events for device %s", len(events), t.DeviceID)
+		go ed.publishEvents(ctx, events)
+	}
+}
+
+func (ed *EventDetector) publishEvents(ctx context.Context, events []*event.Event) {
+	for _, e := range events {
+		// Publish to RabbitMQ
+		if ed.rmqPublisher != nil {
+			if err := ed.rmqPublisher.PublishEvent(ctx, e); err != nil {
+				log.Printf("Failed to publish event to RabbitMQ: %v", err)
+			}
+		}
+
+		// Publish to Redis Pub/Sub
+		if ed.redisPubsub != nil {
+			alert := &redis.EventAlert{
+				DeviceID:    e.DeviceID,
+				EventType:   string(e.Type),
+				Severity:    string(e.Severity),
+				Description: "",
+				Timestamp:   e.Time.Unix(),
+			}
+			if e.Description != nil {
+				alert.Description = *e.Description
+			}
+			if err := ed.redisPubsub.PublishEventAlert(ctx, alert); err != nil {
+				log.Printf("Failed to publish event alert to Redis: %v", err)
+			}
+		}
 	}
 }
 
