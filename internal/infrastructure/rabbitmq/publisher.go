@@ -110,51 +110,46 @@ func (p *Publisher) PublishEventBatch(ctx context.Context, events []*event.Event
 	return lastErr
 }
 
-func (p *Publisher) PublishDeviceHeartbeat(ctx context.Context, deviceID uuid.UUID, batteryLevel, signalStrength *int, timestamp time.Time) error {
+func (p *Publisher) PublishDeviceUpdate(ctx context.Context, updateType string, deviceID uuid.UUID, msg *DeviceUpdateMessage) error {
 	messageID := uuid.New().String()
-	isOnline := true
 
-	msg := DeviceUpdateMessage{
-		MessageID:      messageID,
-		Timestamp:      time.Now(),
-		UpdateType:     "heartbeat",
-		DeviceID:       deviceID,
+	if msg == nil {
+		msg = &DeviceUpdateMessage{}
+	}
+
+	msg.MessageID = messageID
+	msg.Timestamp = time.Now()
+	msg.UpdateType = updateType
+	msg.DeviceID = deviceID
+
+	routingKey := fmt.Sprintf("device.%s", updateType)
+	return p.publish(ctx, routingKey, messageID, msg)
+}
+
+func (p *Publisher) PublishDeviceHeartbeat(ctx context.Context, deviceID uuid.UUID, batteryLevel, signalStrength *int, timestamp time.Time) error {
+	isOnline := true
+	msg := &DeviceUpdateMessage{
 		IsOnline:       &isOnline,
 		LastSeen:       &timestamp,
 		BatteryLevel:   batteryLevel,
 		SignalStrength: signalStrength,
 	}
-
-	return p.publish(ctx, "device.heartbeat", messageID, msg)
+	return p.PublishDeviceUpdate(ctx, "heartbeat", deviceID, msg)
 }
 
 func (p *Publisher) PublishDeviceStatus(ctx context.Context, deviceID uuid.UUID, isOnline bool, lastSeen time.Time) error {
-	messageID := uuid.New().String()
-
-	msg := DeviceUpdateMessage{
-		MessageID:  messageID,
-		Timestamp:  time.Now(),
-		UpdateType: "status",
-		DeviceID:   deviceID,
-		IsOnline:   &isOnline,
-		LastSeen:   &lastSeen,
+	msg := &DeviceUpdateMessage{
+		IsOnline: &isOnline,
+		LastSeen: &lastSeen,
 	}
-
-	return p.publish(ctx, "device.status", messageID, msg)
+	return p.PublishDeviceUpdate(ctx, "status", deviceID, msg)
 }
 
 func (p *Publisher) PublishDeviceLocation(ctx context.Context, deviceID uuid.UUID, location *Location) error {
-	messageID := uuid.New().String()
-
-	msg := DeviceUpdateMessage{
-		MessageID:  messageID,
-		Timestamp:  time.Now(),
-		UpdateType: "location",
-		DeviceID:   deviceID,
-		Location:   location,
+	msg := &DeviceUpdateMessage{
+		Location: location,
 	}
-
-	return p.publish(ctx, "device.location", messageID, msg)
+	return p.PublishDeviceUpdate(ctx, "location", deviceID, msg)
 }
 
 func (p *Publisher) PublishShipmentUpdate(ctx context.Context, update *ShipmentUpdateMessage) error {

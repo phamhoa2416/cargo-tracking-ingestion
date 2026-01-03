@@ -156,27 +156,19 @@ func (c *Client) handleReconnect() {
 
 		log.Printf("RabbitMQ connection lost: %v. Starting reconnection...", err)
 
-		for attempt := 0; attempt < 10; attempt++ {
+		for {
 			if c.isClosed() {
 				return
 			}
 
-			backoff := time.Duration(1<<uint(attempt))*500*time.Millisecond + 2*time.Second
-			if backoff > 30*time.Second {
-				backoff = 30 * time.Second
-			}
-			time.Sleep(backoff)
+			time.Sleep(5 * time.Second)
 
 			if err := c.connect(); err == nil {
 				log.Println("RabbitMQ reconnected successfully")
 				break
 			} else {
-				log.Printf("Reconnect attempt %d failed: %v", attempt+1, err)
+				log.Printf("Reconnect failed: %v, will retry...", err)
 			}
-		}
-
-		if !c.isClosed() {
-			log.Println("Failed to reconnect after multiple attempts. Will retry later...")
 		}
 	}
 }
