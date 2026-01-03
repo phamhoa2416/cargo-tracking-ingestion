@@ -57,131 +57,62 @@ type ShipmentUpdate struct {
 	Timestamp  int64 `json:"timestamp"`
 }
 
-func (ps *PubSub) PublishTelemetryUpdate(ctx context.Context, update *TelemetryUpdate) error {
-	data, err := json.Marshal(update)
+func (ps *PubSub) publish(ctx context.Context, channel string, payload any) error {
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
+	return ps.client.Client().Publish(ctx, channel, data).Err()
+}
 
-	return ps.client.Client().Publish(ctx, channelTelemetryUpdates, data).Err()
+func (ps *PubSub) PublishTelemetryUpdate(ctx context.Context, update *TelemetryUpdate) error {
+	return ps.publish(ctx, channelTelemetryUpdates, update)
 }
 
 func (ps *PubSub) PublishEventAlert(ctx context.Context, alert *EventAlert) error {
-	data, err := json.Marshal(alert)
-	if err != nil {
-		return err
-	}
-
-	return ps.client.Client().Publish(ctx, channelEventAlerts, data).Err()
+	return ps.publish(ctx, channelEventAlerts, alert)
 }
 
 func (ps *PubSub) PublishDeviceStatusUpdate(ctx context.Context, status *DeviceStatusUpdate) error {
-	data, err := json.Marshal(status)
-	if err != nil {
-		return err
-	}
-
-	return ps.client.Client().Publish(ctx, channelDeviceStatus, data).Err()
+	return ps.publish(ctx, channelDeviceStatus, status)
 }
 
 func (ps *PubSub) PublishShipmentUpdate(ctx context.Context, update *ShipmentUpdate) error {
-	data, err := json.Marshal(update)
-	if err != nil {
-		return err
-	}
-
-	return ps.client.Client().Publish(ctx, channelShipmentUpdates, data).Err()
+	return ps.publish(ctx, channelShipmentUpdates, update)
 }
 
-func (ps *PubSub) SubscribeTelemetryUpdates(ctx context.Context, handler func(update *TelemetryUpdate)) error {
+func (ps *PubSub) Subscribe(ctx context.Context, channel string, handler func(*redis.Message)) {
 	go func() {
-		if err := ps.subscribe(ctx, channelTelemetryUpdates, func(msg *redis.Message) {
-			var update TelemetryUpdate
-			if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
-				log.Printf("Failed to unmarshal telemetry update: %v", err)
-				return
-			}
-			handler(&update)
-		}); err != nil && ctx.Err() == nil {
-			log.Printf("Telemetry subscription stopped: %v", err)
+		if err := ps.subscribe(ctx, channel, handler); err != nil && ctx.Err() == nil {
+			log.Printf("Redis subscription stopped [%s]: %v", channel, err)
 		}
 	}()
-
-	return nil
 }
 
-func (ps *PubSub) SubscribeEventAlerts(ctx context.Context, handler func(*EventAlert)) error {
-	go func() {
-		if err := ps.subscribe(ctx, channelEventAlerts, func(msg *redis.Message) {
-			var alert EventAlert
-			if err := json.Unmarshal([]byte(msg.Payload), &alert); err != nil {
-				log.Printf("Failed to unmarshal event alert: %v", err)
-				return
-			}
-			handler(&alert)
-		}); err != nil && ctx.Err() == nil {
-			log.Printf("Event alert subscription stopped: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (ps *PubSub) SubscribeDeviceStatus(ctx context.Context, handler func(*DeviceStatusUpdate)) error {
-	go func() {
-		if err := ps.subscribe(ctx, channelDeviceStatus, func(msg *redis.Message) {
-			var status DeviceStatusUpdate
-			if err := json.Unmarshal([]byte(msg.Payload), &status); err != nil {
-				log.Printf("Failed to unmarshal device status: %v", err)
-				return
-			}
-			handler(&status)
-		}); err != nil && ctx.Err() == nil {
-			log.Printf("Device status subscription stopped: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (ps *PubSub) SubscribeShipmentUpdates(ctx context.Context, handler func(*ShipmentUpdate)) error {
-	go func() {
-		if err := ps.subscribe(ctx, channelShipmentUpdates, func(msg *redis.Message) {
-			var update ShipmentUpdate
-			if err := json.Unmarshal([]byte(msg.Payload), &update); err != nil {
-				log.Printf("Failed to unmarshal shipment update: %v", err)
-				return
-			}
-			handler(&update)
-		}); err != nil && ctx.Err() == nil {
-			log.Printf("Shipment update subscription stopped: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (ps *PubSub) subscribe(ctx context.Context, channel string, handler func(message *redis.Message)) error {
+func (ps *PubSub) subscribe(ctx context.Context, channel string, handler func(*redis.Message)) error {
 	pubsub := ps.client.Client().Subscribe(ctx, channel)
-	defer pubsub.Close()
+	defer func(pubsub *redis.PubSub) {
+		err := pubsub.Close()
+		if err != nil {
+			log.Printf("Failed to close redis pubsub for channel %s: %v", channel, err)
+		}
+	}(pubsub)
 
 	ch := pubsub.Channel()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg, ok := <-ch:
 			if !ok {
-				return fmt.Errorf("channel closed")
-			}
-			if msg == nil {
-				continue
+				return fmt.Errorf("redis channel closed: %s", channel)
 			}
 
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("Panic in handler: %v", r)
+						log.Printf("panic in redis handler [%s]: %v", channel, r)
 					}
 				}()
 				handler(msg)

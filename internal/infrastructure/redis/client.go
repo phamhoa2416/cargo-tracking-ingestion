@@ -13,20 +13,32 @@ type Client struct {
 	client *redis.Client
 }
 
-func NewClient(config *config.RedisConfig) (*Client, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         fmt.Sprintf("%s:%d", config.Host, config.Port),
-		Password:     config.Password,
-		DB:           config.DB,
-		PoolSize:     config.PoolSize,
-		MinIdleConns: config.MinIdleConns,
-		MaxRetries:   config.MaxRetries,
-	})
+func NewClient(cfg *config.RedisConfig) (*Client, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("redis config is nil")
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	opts := &redis.Options{
+		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		DB:           cfg.DB,
+		PoolSize:     cfg.PoolSize,
+		MinIdleConns: cfg.MinIdleConns,
+		MaxRetries:   cfg.MaxRetries,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	}
+
+	rdb := redis.NewClient(opts)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
+		err := rdb.Close()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -38,7 +50,10 @@ func (c *Client) Client() *redis.Client {
 }
 
 func (c *Client) Close() error {
-	return c.client.Close()
+	if c.client != nil {
+		return c.client.Close()
+	}
+	return nil
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {

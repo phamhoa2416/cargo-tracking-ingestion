@@ -53,6 +53,7 @@ type RabbitMQConfig struct {
 	DeviceUpdateQueue string
 	PrefetchCount     int
 	Durable           bool
+	CustomerTag       string
 }
 type MQTTConfig struct {
 	Broker            string
@@ -136,6 +137,7 @@ func Load() (*Config, error) {
 			URL:               viper.GetString("RABBIT_URL"),
 			Exchange:          viper.GetString("RABBIT_EXCHANGE"),
 			EventQueue:        viper.GetString("RABBIT_EVENT_QUEUE"),
+			CustomerTag:       viper.GetString("RABBIT_CUSTOMER_TAG"),
 			DeviceUpdateQueue: viper.GetString("RABBIT_DEVICE_UPDATE_QUEUE"),
 			PrefetchCount:     viper.GetInt("RABBIT_PREFETCH_COUNT"),
 			Durable:           viper.GetBool("RABBIT_DURABLE"),

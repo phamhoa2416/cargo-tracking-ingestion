@@ -18,9 +18,11 @@ import (
 type MessageHandler func(payload []byte, topic string) error
 
 type Client struct {
-	client           mqtt.Client
-	config           *config.MQTTConfig
-	connected        atomic.Bool
+	client mqtt.Client
+	config *config.MQTTConfig
+
+	connected atomic.Bool
+
 	mu               sync.RWMutex
 	telemetryHandler MessageHandler
 	heartbeatHandler MessageHandler
@@ -33,28 +35,28 @@ func NewClient(config *config.MQTTConfig) *Client {
 }
 
 func (c *Client) Connect(ctx context.Context) error {
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", c.config.Broker, c.config.Port))
-	opts.SetClientID(c.config.ClientID)
-	opts.SetUsername(c.config.Username)
-	opts.SetPassword(c.config.Password)
-	opts.SetCleanSession(c.config.CleanSession)
-	opts.SetKeepAlive(c.config.KeepAlive)
-	opts.SetConnectTimeout(c.config.ConnectTimeout)
-	opts.SetAutoReconnect(c.config.AutoReconnect)
-	opts.SetMaxReconnectInterval(c.config.MaxReconnectDelay)
+	opts := mqtt.NewClientOptions().
+		AddBroker(fmt.Sprintf("tcp://%s:%d", c.config.Broker, c.config.Port)).
+		SetClientID(c.config.ClientID).
+		SetUsername(c.config.Username).
+		SetPassword(c.config.Password).
+		SetCleanSession(c.config.CleanSession).
+		SetKeepAlive(c.config.KeepAlive).
+		SetConnectTimeout(c.config.ConnectTimeout).
+		SetAutoReconnect(c.config.AutoReconnect).
+		SetMaxReconnectInterval(c.config.MaxReconnectDelay)
 
-	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		log.Printf("Connection lost: %v", err)
+	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		log.Printf("[MQTT] connection lost: %v", err)
 		c.connected.Store(false)
 	})
 
-	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		log.Println("MQTT connected successfully")
+	opts.SetOnConnectHandler(func(_ mqtt.Client) {
+		log.Println("[MQTT] connected")
 		c.connected.Store(true)
 
 		if err := c.subscribe(); err != nil {
-			log.Printf("Failed to subscribe on reconnect: %v", err)
+			log.Printf("[MQTT] resubscribe failed: %v", err)
 		}
 	})
 
@@ -62,11 +64,11 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	token := c.client.Connect()
 	if !token.WaitTimeout(c.config.ConnectTimeout) {
-		return fmt.Errorf("connection timeout")
+		return fmt.Errorf("mqtt connect timeout")
 	}
 
 	if err := token.Error(); err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("mqtt connect failed: %w", err)
 	}
 
 	log.Printf("Connected to MQTT broker at %s:%d", c.config.Broker, c.config.Port)
@@ -75,76 +77,80 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 func (c *Client) subscribe() error {
-	c.mu.RLock()
-	telemetryHandler := c.telemetryHandler
-	heartbeatHandler := c.heartbeatHandler
-	c.mu.RUnlock()
+	if err := c.subscribeTopic(
+		c.config.TelemetryTopic,
+		func(_ mqtt.Client, message mqtt.Message) {
+			c.mu.RLock()
+			handler := c.telemetryHandler
+			c.mu.RUnlock()
 
-	token := c.client.Subscribe(c.config.TelemetryTopic, byte(c.config.QoS), func(client mqtt.Client, msg mqtt.Message) {
-		c.mu.RLock()
-		handler := c.telemetryHandler
-		c.mu.RUnlock()
-
-		if handler != nil {
-			if err := handler(msg.Payload(), msg.Topic()); err != nil {
-				log.Printf("Error handling telemetry message: %v", err)
+			if handler == nil {
+				return
 			}
-		}
-	})
-	if !token.WaitTimeout(5 * time.Second) {
-		return fmt.Errorf("telemetry subscription timeout")
-	}
-	if err := token.Error(); err != nil {
-		return fmt.Errorf("failed to subscribe to telemetry: %w", err)
-	}
-	log.Printf("Subscribed to telemetry topic: %s", c.config.TelemetryTopic)
 
-	// Avoid unused variable warning
-	_ = telemetryHandler
-	_ = heartbeatHandler
-
-	token = c.client.Subscribe(c.config.HeartbeatTopic, byte(c.config.QoS), func(client mqtt.Client, msg mqtt.Message) {
-		c.mu.RLock()
-		handler := c.heartbeatHandler
-		c.mu.RUnlock()
-
-		if handler != nil {
-			if err := handler(msg.Payload(), msg.Topic()); err != nil {
-				log.Printf("Error handling heartbeat message: %v", err)
+			if err := handler(message.Payload(), message.Topic()); err != nil {
+				log.Printf("[MQTT] telemetry handler error: %v", err)
 			}
-		}
-	})
-	if !token.WaitTimeout(5 * time.Second) {
-		return fmt.Errorf("heartbeat subscription timeout")
+		},
+	); err != nil {
+		return err
 	}
-	if err := token.Error(); err != nil {
-		return fmt.Errorf("failed to subscribe to heartbeat: %w", err)
+
+	if err := c.subscribeTopic(
+		c.config.HeartbeatTopic,
+		func(_ mqtt.Client, message mqtt.Message) {
+			c.mu.RLock()
+			handler := c.heartbeatHandler
+			c.mu.RUnlock()
+
+			if handler == nil {
+				return
+			}
+
+			if err := handler(message.Payload(), message.Topic()); err != nil {
+				log.Printf("[MQTT] heartbeat handler error: %v", err)
+			}
+		},
+	); err != nil {
+		return err
 	}
-	log.Printf("Subscribed to heartbeat topic: %s", c.config.HeartbeatTopic)
 
 	return nil
 }
 
-func (c *Client) SetTelemetryHandler(handler MessageHandler) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.telemetryHandler = handler
+func (c *Client) subscribeTopic(topic string, handler mqtt.MessageHandler) error {
+	token := c.client.Subscribe(topic, byte(c.config.QoS), handler)
+	if !token.WaitTimeout(5 * time.Second) {
+		return fmt.Errorf("subscribe timeout: %s", topic)
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("subscribe failed (%s): %w", topic, err)
+	}
+
+	log.Printf("[MQTT] subscribed to %s", topic)
+	return nil
 }
 
-func (c *Client) SetHeartbeatHandler(handler MessageHandler) {
+func (c *Client) SetTelemetryHandler(h MessageHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.heartbeatHandler = handler
+	c.telemetryHandler = h
 }
 
-func (c *Client) Publish(topic string, payload interface{}) error {
-	if !c.connected.Load() {
-		return fmt.Errorf("mqtt client not connected")
+func (c *Client) SetHeartbeatHandler(h MessageHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.heartbeatHandler = h
+}
+
+func (c *Client) Publish(topic string, payload any) error {
+	if !c.IsConnected() {
+		return fmt.Errorf("mqtt not connected")
 	}
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return fmt.Errorf("marshal payload failed: %w", err)
 	}
 
 	token := c.client.Publish(topic, byte(c.config.QoS), false, data)
@@ -155,8 +161,8 @@ func (c *Client) Publish(topic string, payload interface{}) error {
 	return token.Error()
 }
 
-func (c *Client) PublishCommand(deviceId uuid.UUID, command interface{}) error {
-	topic := fmt.Sprintf("device/%s/command", deviceId.String())
+func (c *Client) PublishCommand(deviceID uuid.UUID, command any) error {
+	topic := fmt.Sprintf("device/%s/command", deviceID)
 	return c.Publish(topic, command)
 }
 
@@ -164,73 +170,64 @@ func (c *Client) Disconnect() {
 	if c.client != nil && c.client.IsConnected() {
 		c.client.Disconnect(250)
 		c.connected.Store(false)
-		log.Println("MQTT client disconnected")
+		log.Println("[MQTT] disconnected")
 	}
 }
 
 func (c *Client) IsConnected() bool {
-	return c.connected.Load() && c.client != nil && c.client.IsConnected()
+	return c.client != nil &&
+		c.client.IsConnected() &&
+		c.connected.Load()
 }
 
 func ParseTelemetryPayload(payload []byte) (*telemetry.Telemetry, error) {
-	var mqttPayload telemetry.MQTTTelemetryPayload
-	if err := json.Unmarshal(payload, &mqttPayload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	var raw telemetry.MQTTTelemetryPayload
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("invalid telemetry payload: %w", err)
 	}
 
-	deviceID, err := uuid.Parse(mqttPayload.DeviceID)
+	deviceID, err := uuid.Parse(raw.DeviceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid device_id: %w", err)
 	}
 
-	hardwareUID, err := uuid.Parse(mqttPayload.HardwareUID)
+	hardwareUID, err := uuid.Parse(raw.HardwareUID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hardware_uid: %w", err)
 	}
 
 	t := &telemetry.Telemetry{
-		Time:        time.UnixMilli(mqttPayload.Timestamp),
+		Time:        time.UnixMilli(raw.Timestamp),
 		DeviceID:    deviceID,
 		HardwareUID: hardwareUID,
 	}
 
-	data := mqttPayload.Data
+	data := raw.Data
+	assignFloat := func(key string, target **float64) {
+		if v, ok := data[key].(float64); ok {
+			*target = &v
+		}
+	}
 
-	if v, ok := data["temperature"].(float64); ok {
-		t.Temperature = &v
+	assignInt := func(key string, target **int) {
+		if v, ok := data[key].(float64); ok {
+			i := int(v)
+			*target = &i
+		}
 	}
-	if v, ok := data["humidity"].(float64); ok {
-		t.Humidity = &v
-	}
-	if v, ok := data["pressure"].(float64); ok {
-		t.Pressure = &v
-	}
-	if v, ok := data["latitude"].(float64); ok {
-		t.Latitude = &v
-	}
-	if v, ok := data["longitude"].(float64); ok {
-		t.Longitude = &v
-	}
-	if v, ok := data["altitude"].(float64); ok {
-		t.Altitude = &v
-	}
-	if v, ok := data["speed"].(float64); ok {
-		t.Speed = &v
-	}
-	if v, ok := data["heading"].(float64); ok {
-		t.Heading = &v
-	}
-	if v, ok := data["accuracy"].(float64); ok {
-		t.Accuracy = &v
-	}
-	if v, ok := data["battery_level"].(float64); ok {
-		battery := int(v)
-		t.BatteryLevel = &battery
-	}
-	if v, ok := data["signal_strength"].(float64); ok {
-		signal := int(v)
-		t.SignalStrength = &signal
-	}
+
+	assignFloat("temperature", &t.Temperature)
+	assignFloat("humidity", &t.Humidity)
+	assignFloat("pressure", &t.Pressure)
+	assignFloat("latitude", &t.Latitude)
+	assignFloat("longitude", &t.Longitude)
+	assignFloat("altitude", &t.Altitude)
+	assignFloat("speed", &t.Speed)
+	assignFloat("heading", &t.Heading)
+	assignFloat("accuracy", &t.Accuracy)
+	assignInt("battery_level", &t.BatteryLevel)
+	assignInt("signal_strength", &t.SignalStrength)
+
 	if v, ok := data["is_moving"].(bool); ok {
 		t.IsMoving = &v
 	}
@@ -238,34 +235,35 @@ func ParseTelemetryPayload(payload []byte) (*telemetry.Telemetry, error) {
 		t.EventType = &v
 	}
 
-	rawData, _ := json.Marshal(data)
-	t.RawPayload = rawData
+	if rawPayload, err := json.Marshal(data); err == nil {
+		t.RawPayload = rawPayload
+	}
 
 	return t, nil
 }
 
 func ParseHeartbeatPayload(payload []byte) (*telemetry.Heartbeat, error) {
-	var mqttPayload telemetry.MQTTHeartbeatPayload
-	if err := json.Unmarshal(payload, &mqttPayload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal heartbeat: %w", err)
+	var raw telemetry.MQTTHeartbeatPayload
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("invalid heartbeat payload: %w", err)
 	}
 
-	deviceID, err := uuid.Parse(mqttPayload.DeviceID)
+	deviceID, err := uuid.Parse(raw.DeviceID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid device_id: %w", err)
+		return nil, err
 	}
 
-	hardwareUID, err := uuid.Parse(mqttPayload.HardwareUID)
+	hardwareUID, err := uuid.Parse(raw.HardwareUID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid hardware_uid: %w", err)
+		return nil, err
 	}
 
 	return &telemetry.Heartbeat{
 		DeviceID:        deviceID,
 		HardwareUID:     hardwareUID,
-		Timestamp:       time.UnixMilli(mqttPayload.Timestamp),
-		BatteryLevel:    mqttPayload.BatteryLevel,
-		SignalStrength:  mqttPayload.SignalStrength,
-		FirmwareVersion: mqttPayload.FirmwareVersion,
+		Timestamp:       time.UnixMilli(raw.Timestamp),
+		BatteryLevel:    raw.BatteryLevel,
+		SignalStrength:  raw.SignalStrength,
+		FirmwareVersion: raw.FirmwareVersion,
 	}, nil
 }

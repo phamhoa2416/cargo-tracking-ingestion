@@ -75,7 +75,7 @@ func (p *Publisher) PublishEvent(ctx context.Context, e *event.Event) error {
 		MessageID:   messageID,
 		Timestamp:   time.Now(),
 		Source:      "cargo-tracking-ingestion",
-		EventType:   string(e.EventType),
+		EventType:   string(e.Type),
 		DeviceID:    e.DeviceID,
 		Severity:    string(e.Severity),
 		Description: "",
@@ -90,10 +90,12 @@ func (p *Publisher) PublishEvent(ctx context.Context, e *event.Event) error {
 		var metadata map[string]interface{}
 		if err := json.Unmarshal(e.Metadata, &metadata); err == nil {
 			msg.Metadata = metadata
+		} else {
+			log.Printf("Failed to unmarshal event metadata for device %s: %v", e.DeviceID, err)
 		}
 	}
 
-	routingKey := fmt.Sprintf("event.%s", e.EventType)
+	routingKey := fmt.Sprintf("event.%s", e.Type)
 	return p.publish(ctx, routingKey, messageID, msg)
 }
 
@@ -101,7 +103,7 @@ func (p *Publisher) PublishEventBatch(ctx context.Context, events []*event.Event
 	var lastErr error
 	for _, e := range events {
 		if err := p.PublishEvent(ctx, e); err != nil {
-			log.Printf("Failed to publish event for device %s: %v", e.DeviceID, err)
+			log.Printf("Failed to publish event %s for device %s: %v", e.Type, e.DeviceID, err)
 			lastErr = err
 		}
 	}
@@ -156,11 +158,9 @@ func (p *Publisher) PublishDeviceLocation(ctx context.Context, deviceID uuid.UUI
 }
 
 func (p *Publisher) PublishShipmentUpdate(ctx context.Context, update *ShipmentUpdateMessage) error {
-	messageID := uuid.New().String()
-	update.MessageID = messageID
+	update.MessageID = uuid.New().String()
 	update.Timestamp = time.Now()
-
-	return p.publish(ctx, "shipment.tracking", messageID, update)
+	return p.publish(ctx, "shipment.tracking", update.MessageID, update)
 }
 
 func (p *Publisher) publish(ctx context.Context, routingKey, messageID string, message interface{}) error {
@@ -177,23 +177,11 @@ func (p *Publisher) publish(ctx context.Context, routingKey, messageID string, m
 		MessageId:    messageID,
 	}
 
-	maxRetries := 3
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		err = p.client.Publish(ctx, p.config.Exchange, routingKey, publishing)
-		if err == nil {
-			log.Printf("Published to %s: %s", p.config.Exchange, routingKey)
-			return nil
-		}
-
-		lastErr = err
-		if attempt < maxRetries {
-			log.Printf("Publish failed (attempt %d/%d): %v. Retrying...",
-				attempt, maxRetries, err)
-			time.Sleep(time.Duration(attempt) * time.Second)
-		}
+	err = p.client.Publish(ctx, p.config.Exchange, routingKey, publishing)
+	if err != nil {
+		log.Printf("Failed to publish to routing key %s: %v", routingKey, err)
+		return err
 	}
 
-	return fmt.Errorf("publish failed after %d attempts: %w", maxRetries, lastErr)
+	return nil
 }

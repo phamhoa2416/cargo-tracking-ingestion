@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,10 +15,11 @@ const (
 	deviceLocationPrefix  = "device:location:"
 	deviceStatusPrefix    = "device:status:"
 	shipmentDevicesPrefix = "shipment:devices:"
-	deviceCacheTTL        = 1 * time.Hour
-	locationCacheTTL      = 5 * time.Minute
-	statusCacheTTL        = 10 * time.Minute
-	shipmentDevicesTTL    = 24 * time.Hour
+
+	deviceCacheTTL     = 1 * time.Hour
+	locationCacheTTL   = 5 * time.Minute
+	statusCacheTTL     = 10 * time.Minute
+	shipmentDevicesTTL = 24 * time.Hour
 )
 
 type Cache struct {
@@ -85,6 +85,7 @@ func (c *Cache) GetDeviceInfo(ctx context.Context, deviceID uuid.UUID) (*DeviceI
 
 func (c *Cache) SetDeviceInfo(ctx context.Context, info *DeviceInfo) error {
 	info.CachedAt = time.Now()
+
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err
@@ -101,11 +102,11 @@ func (c *Cache) DeleteDeviceInfo(ctx context.Context, deviceID uuid.UUID) error 
 
 func (c *Cache) GetDeviceLocation(ctx context.Context, deviceID uuid.UUID) (*DeviceLocation, error) {
 	key := deviceLocationPrefix + deviceID.String()
+
 	data, err := c.client.Client().Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +121,7 @@ func (c *Cache) GetDeviceLocation(ctx context.Context, deviceID uuid.UUID) (*Dev
 
 func (c *Cache) SetDeviceLocation(ctx context.Context, location *DeviceLocation) error {
 	location.CachedAt = time.Now()
+
 	data, err := json.Marshal(location)
 	if err != nil {
 		return err
@@ -131,11 +133,11 @@ func (c *Cache) SetDeviceLocation(ctx context.Context, location *DeviceLocation)
 
 func (c *Cache) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (*DeviceStatus, error) {
 	key := deviceStatusPrefix + deviceID.String()
+
 	data, err := c.client.Client().Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +152,7 @@ func (c *Cache) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (*Devic
 
 func (c *Cache) SetDeviceStatus(ctx context.Context, status *DeviceStatus) error {
 	status.CachedAt = time.Now()
+
 	data, err := json.Marshal(status)
 	if err != nil {
 		return err
@@ -161,40 +164,33 @@ func (c *Cache) SetDeviceStatus(ctx context.Context, status *DeviceStatus) error
 
 func (c *Cache) GetShipmentDevices(ctx context.Context, shipmentID uuid.UUID) ([]uuid.UUID, error) {
 	key := shipmentDevicesPrefix + shipmentID.String()
+
 	members, err := c.client.Client().SMembers(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return []uuid.UUID{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	deviceIDs := make([]uuid.UUID, 0, len(members))
-	for _, member := range members {
-		if id, err := uuid.Parse(member); err == nil {
-			deviceIDs = append(deviceIDs, id)
+	devices := make([]uuid.UUID, 0, len(members))
+	for _, m := range members {
+		if id, err := uuid.Parse(m); err == nil {
+			devices = append(devices, id)
 		}
 	}
 
-	return deviceIDs, nil
+	return devices, nil
 }
 
 func (c *Cache) AddShipmentDevice(ctx context.Context, shipmentID, deviceID uuid.UUID) error {
 	key := shipmentDevicesPrefix + shipmentID.String()
-	pipe := c.client.Client().Pipeline()
-	addCmd := pipe.SAdd(ctx, key, deviceID.String())
-	expireCmd := pipe.Expire(ctx, key, shipmentDevicesTTL)
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("pipeline failed: %w", err)
+
+	if err := c.client.Client().SAdd(ctx, key, deviceID.String()).Err(); err != nil {
+		return err
 	}
 
-	if err := addCmd.Err(); err != nil {
-		return fmt.Errorf("sadd failed: %w", err)
-	}
-
-	if err := expireCmd.Err(); err != nil {
-		return fmt.Errorf("expire failed: %w", err)
-	}
-
-	return err
+	return c.client.Client().Expire(ctx, key, shipmentDevicesTTL).Err()
 }
 
 func (c *Cache) RemoveShipmentDevice(ctx context.Context, shipmentID, deviceID uuid.UUID) error {

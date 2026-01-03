@@ -22,13 +22,13 @@ type Consumer struct {
 	wg     sync.WaitGroup
 }
 
-func NewConsumer(client *Client, config *config.RabbitMQConfig, cache *redis.Cache) *Consumer {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewConsumer(ctx context.Context, client *Client, config *config.RabbitMQConfig, cache *redis.Cache) *Consumer {
+	cctx, cancel := context.WithCancel(ctx)
 	return &Consumer{
 		client: client,
 		config: config,
 		cache:  cache,
-		ctx:    ctx,
+		ctx:    cctx,
 		cancel: cancel,
 	}
 }
@@ -51,93 +51,70 @@ type ShipmentAssignmentMessage struct {
 	Action     string    `json:"action"`
 }
 
-func (c *Consumer) ConsumeDeviceUpdates(ctx context.Context) error {
-	c.wg.Add(1)
-	go c.consumeLoop(ctx)
-	return nil
-}
-
-func (c *Consumer) consumeLoop(ctx context.Context) {
-	defer c.wg.Done()
-
-	for {
-		select {
-		case <-c.ctx.Done():
-			log.Println("Consumer context cancelled, stopping consume loop")
-			return
-		case <-ctx.Done():
-			log.Println("Parent context cancelled, stopping consume loop")
-			return
-		default:
-		}
-
-		// Start consuming
-		if err := c.startConsuming(ctx); err != nil {
-			log.Printf("Error in consumer: %v", err)
-		}
-
-		// Wait for reconnect signal or context cancellation
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (c *Consumer) startConsuming(ctx context.Context) error {
-	msgs, err := c.client.Consume(c.config.DeviceUpdateQueue, "ingestion-service-consumer")
+func (c *Consumer) Start() error {
+	msgs, err := c.client.Consume(
+		c.config.DeviceUpdateQueue,
+		c.config.CustomerTag,
+	)
 	if err != nil {
 		return err
 	}
 
+	c.wg.Add(1)
+	go func() {
+		err := c.consume(msgs)
+		if err != nil {
+			log.Printf("Error consuming messages: %v", err)
+		}
+	}()
+
+	log.Printf("RabbitMQ consumer started on queue: %s", c.config.DeviceUpdateQueue)
+	return nil
+}
+
+func (c *Consumer) consume(msgs <-chan amqp.Delivery) error {
 	log.Printf("Started consuming from queue: %s", c.config.DeviceUpdateQueue)
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			return c.ctx.Err()
-		case <-ctx.Done():
-			return ctx.Err()
 		case msg, ok := <-msgs:
 			if !ok {
-				log.Println("Message channel closed, will attempt to reconnect")
+				log.Println("Delivery channel closed, waiting for reconnect")
 				return nil
 			}
-			c.handleDeviceUpdate(ctx, msg)
+			c.handleMessage(msg)
 		}
 	}
 }
 
-func (c *Consumer) handleDeviceUpdate(ctx context.Context, msg amqp.Delivery) {
+func (c *Consumer) handleMessage(msg amqp.Delivery) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Recovered from panic in handleDeviceUpdate: %v", r)
+			log.Printf("Recovered from panic: %v", r)
 			_ = msg.Nack(false, true)
 		}
 	}()
 
 	switch msg.RoutingKey {
 	case "device.config.update":
-		c.handleDeviceConfigUpdate(ctx, msg)
+		c.handleDeviceConfigUpdate(msg)
 	case "device.shipment.assignment":
-		c.handleShipmentAssignment(ctx, msg)
+		c.handleShipmentAssignment(msg)
 	default:
 		log.Printf("Unknown routing key: %s", msg.RoutingKey)
 		_ = msg.Ack(false)
 	}
 }
 
-func (c *Consumer) handleDeviceConfigUpdate(ctx context.Context, msg amqp.Delivery) {
+func (c *Consumer) handleDeviceConfigUpdate(msg amqp.Delivery) {
 	var update DeviceConfigUpdateMessage
 	if err := json.Unmarshal(msg.Body, &update); err != nil {
-		log.Printf("Failed to unmarshal device config update: %v", err)
-		_ = msg.Nack(false, false) // Don't requeue invalid messages
+		log.Printf("Invalid device config update: %v", err)
+		_ = msg.Nack(false, false)
 		return
 	}
-
-	log.Printf("Received device config update for device: %s", update.DeviceID)
 
 	// Update cache
 	deviceInfo := &redis.DeviceInfo{
@@ -149,7 +126,7 @@ func (c *Consumer) handleDeviceConfigUpdate(ctx context.Context, msg amqp.Delive
 		IsActive:    update.IsActive,
 	}
 
-	if err := c.cache.SetDeviceInfo(ctx, deviceInfo); err != nil {
+	if err := c.cache.SetDeviceInfo(c.ctx, deviceInfo); err != nil {
 		log.Printf("Failed to update device cache: %v", err)
 		_ = msg.Nack(false, true) // Requeue
 		return
@@ -157,17 +134,13 @@ func (c *Consumer) handleDeviceConfigUpdate(ctx context.Context, msg amqp.Delive
 
 	// If assigned to shipment, update shipment-device mapping
 	if update.ShipmentID != nil {
-		if err := c.cache.AddShipmentDevice(ctx, *update.ShipmentID, update.DeviceID); err != nil {
-			log.Printf("Failed to add device to shipment: %v", err)
-			// Don't fail the whole message for this, but log the error
-		}
+		_ = c.cache.AddShipmentDevice(c.ctx, *update.ShipmentID, update.DeviceID)
 	}
 
 	_ = msg.Ack(false)
-	log.Printf("Successfully processed device config update for: %s", update.DeviceID)
 }
 
-func (c *Consumer) handleShipmentAssignment(ctx context.Context, msg amqp.Delivery) {
+func (c *Consumer) handleShipmentAssignment(msg amqp.Delivery) {
 	var assignment ShipmentAssignmentMessage
 	if err := json.Unmarshal(msg.Body, &assignment); err != nil {
 		log.Printf("Failed to unmarshal shipment assignment: %v", err)
@@ -180,43 +153,41 @@ func (c *Consumer) handleShipmentAssignment(ctx context.Context, msg amqp.Delive
 
 	switch assignment.Action {
 	case "assign":
-		if err := c.cache.AddShipmentDevice(ctx, assignment.ShipmentID, assignment.DeviceID); err != nil {
+		if err := c.cache.AddShipmentDevice(c.ctx, assignment.ShipmentID, assignment.DeviceID); err != nil {
 			log.Printf("Failed to assign device to shipment: %v", err)
 			_ = msg.Nack(false, true)
 			return
 		}
 
-		deviceInfo, err := c.cache.GetDeviceInfo(ctx, assignment.DeviceID)
+		deviceInfo, err := c.cache.GetDeviceInfo(c.ctx, assignment.DeviceID)
 		if err != nil {
 			log.Printf("Failed to get device info for update: %v", err)
-			// Continue - the main operation succeeded
 		} else if deviceInfo != nil {
 			deviceInfo.ShipmentID = &assignment.ShipmentID
-			if err := c.cache.SetDeviceInfo(ctx, deviceInfo); err != nil {
+			if err := c.cache.SetDeviceInfo(c.ctx, deviceInfo); err != nil {
 				log.Printf("Failed to update device info with shipment: %v", err)
-				// Continue - the main operation succeeded
 			}
 		}
 
 	case "unassign":
-		if err := c.cache.RemoveShipmentDevice(ctx, assignment.ShipmentID, assignment.DeviceID); err != nil {
+		if err := c.cache.RemoveShipmentDevice(c.ctx, assignment.ShipmentID, assignment.DeviceID); err != nil {
 			log.Printf("Failed to unassign device from shipment: %v", err)
 			_ = msg.Nack(false, true)
 			return
 		}
 
-		deviceInfo, err := c.cache.GetDeviceInfo(ctx, assignment.DeviceID)
+		deviceInfo, err := c.cache.GetDeviceInfo(c.ctx, assignment.DeviceID)
 		if err != nil {
 			log.Printf("Failed to get device info for update: %v", err)
 		} else if deviceInfo != nil {
 			deviceInfo.ShipmentID = nil
-			if err := c.cache.SetDeviceInfo(ctx, deviceInfo); err != nil {
+			if err := c.cache.SetDeviceInfo(c.ctx, deviceInfo); err != nil {
 				log.Printf("Failed to update device info: %v", err)
 			}
 		}
 
 	default:
-		log.Printf("Unknown shipment assignment action: %s", assignment.Action)
+		log.Printf("Unknown shipment action: %s", assignment.Action)
 		_ = msg.Nack(false, false)
 		return
 	}
