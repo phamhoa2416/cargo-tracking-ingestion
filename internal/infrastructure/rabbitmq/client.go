@@ -27,12 +27,23 @@ func NewClient(config *config.RabbitMQConfig) (*Client, error) {
 		config: config,
 	}
 
-	if err := client.connect(); err != nil {
-		return nil, err
+	maxRetries := 5
+	backoff := time.Second
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		if err := client.connect(); err != nil {
+			lastErr = err
+			log.Printf("RabbitMQ connection attempt %d/%d failed: %v", i+1, maxRetries, err)
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+		go client.handleReconnect()
+		return client, nil
 	}
 
-	go client.handleReconnect()
-	return client, nil
+	return nil, fmt.Errorf("failed to connect to RabbitMQ after %d attempts: %w", maxRetries, lastErr)
 }
 
 func (c *Client) connect() error {
