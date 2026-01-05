@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=builder /bin/app .
 
 COPY migrations/ ./migrations/
+COPY resources/keys/ ./resources/keys/
 
 EXPOSE 8080
 
