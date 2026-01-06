@@ -57,6 +57,20 @@ func ValidateTelemetry(t *telemetry.Telemetry) error {
 		}
 	}
 
+	// Validate CO2 if provided (typical range: 0-10000 ppm)
+	if t.CO2 != nil {
+		if *t.CO2 < 0 || *t.CO2 > 10000 {
+			return fmt.Errorf("co2 must be between 0 and 10000 ppm")
+		}
+	}
+
+	// Validate light if provided (must be non-negative)
+	if t.Light != nil {
+		if *t.Light < 0 {
+			return fmt.Errorf("light cannot be negative")
+		}
+	}
+
 	// Validate battery level if provided
 	if t.BatteryLevel != nil {
 		if *t.BatteryLevel < 0 || *t.BatteryLevel > 100 {
@@ -71,17 +85,17 @@ func ValidateTelemetry(t *telemetry.Telemetry) error {
 		}
 	}
 
-	// Validate heading if provided
-	if t.Heading != nil {
-		if *t.Heading < 0 || *t.Heading > 360 {
-			return fmt.Errorf("heading must be between 0 and 360")
-		}
-	}
-
 	// Validate accuracy if provided
 	if t.Accuracy != nil {
 		if *t.Accuracy < 0 {
 			return fmt.Errorf("accuracy cannot be negative")
+		}
+	}
+
+	// Validate lean if provided (angle typically -180 to 180 degrees)
+	if t.Lean != nil {
+		if *t.Lean < -180 || *t.Lean > 180 {
+			return fmt.Errorf("lean must be between -180 and 180 degrees")
 		}
 	}
 

@@ -6,14 +6,14 @@ CREATE TABLE device_telemetry
 
     temperature     DOUBLE PRECISION,
     humidity        DOUBLE PRECISION,
-    pressure        DOUBLE PRECISION,
+    co2             DOUBLE PRECISION,
+    light           DOUBLE PRECISION,
 
     latitude        DOUBLE PRECISION,
     longitude       DOUBLE PRECISION,
-    altitude        DOUBLE PRECISION,
     speed           DOUBLE PRECISION,
-    heading         DOUBLE PRECISION,
     accuracy        DOUBLE PRECISION,
+    lean            DOUBLE PRECISION,
 
     battery_level   INTEGER,
     signal_strength INTEGER,

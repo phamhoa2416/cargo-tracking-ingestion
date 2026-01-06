@@ -50,13 +50,6 @@ func ValidateTrackingPoint(point *shipment.TrackingPoint) error {
 		}
 	}
 
-	// Validate heading if provided
-	if point.Heading != nil {
-		if *point.Heading < 0 || *point.Heading > 360 {
-			return fmt.Errorf("heading must be between 0 and 360")
-		}
-	}
-
 	// Validate accuracy if provided
 	if point.Accuracy != nil {
 		if *point.Accuracy < 0 {

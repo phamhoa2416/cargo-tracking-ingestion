@@ -52,7 +52,6 @@ type DeviceUpdateMessage struct {
 type Location struct {
 	Latitude  float64   `json:"latitude"`
 	Longitude float64   `json:"longitude"`
-	Altitude  *float64  `json:"altitude,omitempty"`
 	Accuracy  *float64  `json:"accuracy,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }

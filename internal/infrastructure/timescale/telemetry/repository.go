@@ -25,9 +25,8 @@ func (r *Repository) InsertTelemetry(ctx context.Context, t *telemetry.Telemetry
 	query := `
 		INSERT INTO device_telemetry (
 			time, device_id, hardware_uid,
-			temperature, humidity, pressure,
-			latitude, longitude, altitude, 
-		    speed, heading, accuracy,
+			temperature, humidity, co2, light,
+			latitude, longitude, speed, accuracy, lean,
 			battery_level, signal_strength,
 			is_moving, event_type, raw_payload
 		) VALUES (
@@ -38,9 +37,8 @@ func (r *Repository) InsertTelemetry(ctx context.Context, t *telemetry.Telemetry
 
 	_, err := r.client.Pool().Exec(ctx, query,
 		t.Time, t.DeviceID, t.HardwareUID,
-		t.Temperature, t.Humidity, t.Pressure,
-		t.Latitude, t.Longitude, t.Altitude,
-		t.Speed, t.Heading, t.Accuracy,
+		t.Temperature, t.Humidity, t.CO2, t.Light,
+		t.Latitude, t.Longitude, t.Speed, t.Accuracy, t.Lean,
 		t.BatteryLevel, t.SignalStrength,
 		t.IsMoving, t.EventType, t.RawPayload,
 	)
@@ -56,8 +54,8 @@ func (r *Repository) BatchInsertTelemetry(ctx context.Context, telemetries []*te
 	query := `
 		INSERT INTO device_telemetry (
 			time, device_id, hardware_uid,
-			temperature, humidity, pressure,
-			latitude, longitude, altitude, speed, heading, accuracy,
+			temperature, humidity, co2, light,
+			latitude, longitude, speed, accuracy, lean,
 			battery_level, signal_strength,
 			is_moving, event_type, raw_payload
 		) VALUES (
@@ -68,9 +66,8 @@ func (r *Repository) BatchInsertTelemetry(ctx context.Context, telemetries []*te
 	for _, t := range telemetries {
 		batch.Queue(query,
 			t.Time, t.DeviceID, t.HardwareUID,
-			t.Temperature, t.Humidity, t.Pressure,
-			t.Latitude, t.Longitude, t.Altitude,
-			t.Speed, t.Heading, t.Accuracy,
+			t.Temperature, t.Humidity, t.CO2, t.Light,
+			t.Latitude, t.Longitude, t.Speed, t.Accuracy, t.Lean,
 			t.BatteryLevel, t.SignalStrength,
 			t.IsMoving, t.EventType, t.RawPayload,
 		)
@@ -158,7 +155,7 @@ func (r *Repository) BatchInsertEvents(ctx context.Context, events []*event.Even
 
 func (r *Repository) GetLatestLocation(ctx context.Context, deviceID uuid.UUID) (*telemetry.Location, error) {
 	query := `
-		SELECT device_id, time, latitude, longitude, altitude, speed, heading, accuracy
+		SELECT device_id, time, latitude, longitude, speed, accuracy
 		FROM device_telemetry
 		WHERE device_id = $1
 		  AND latitude IS NOT NULL
@@ -171,8 +168,7 @@ func (r *Repository) GetLatestLocation(ctx context.Context, deviceID uuid.UUID) 
 	err := r.client.Pool().QueryRow(ctx, query, deviceID).Scan(
 		&loc.DeviceID, &loc.Time,
 		&loc.Latitude, &loc.Longitude,
-		&loc.Altitude, &loc.Speed,
-		&loc.Heading, &loc.Accuracy,
+		&loc.Speed, &loc.Accuracy,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -191,7 +187,7 @@ func (r *Repository) GetLocationHistory(
 	params *telemetry.LocationQueryParams,
 ) (*telemetry.LocationHistory, error) {
 	query := `
-		SELECT device_id, time, latitude, longitude, altitude, speed, heading, accuracy
+		SELECT device_id, time, latitude, longitude, speed, accuracy
 		FROM device_telemetry
 		WHERE device_id = $1
 		  AND latitude IS NOT NULL
@@ -221,9 +217,7 @@ func (r *Repository) GetLocationHistory(
 			&loc.Time,
 			&loc.Latitude,
 			&loc.Longitude,
-			&loc.Altitude,
 			&loc.Speed,
-			&loc.Heading,
 			&loc.Accuracy,
 		); err != nil {
 			return nil, fmt.Errorf("scan location row failed: %w", err)

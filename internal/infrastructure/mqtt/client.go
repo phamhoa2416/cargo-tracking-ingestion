@@ -218,13 +218,13 @@ func ParseTelemetryPayload(payload []byte) (*telemetry.Telemetry, error) {
 
 	assignFloat("temperature", &t.Temperature)
 	assignFloat("humidity", &t.Humidity)
-	assignFloat("pressure", &t.Pressure)
+	assignFloat("co2", &t.CO2)
+	assignFloat("light", &t.Light)
 	assignFloat("latitude", &t.Latitude)
 	assignFloat("longitude", &t.Longitude)
-	assignFloat("altitude", &t.Altitude)
 	assignFloat("speed", &t.Speed)
-	assignFloat("heading", &t.Heading)
 	assignFloat("accuracy", &t.Accuracy)
+	assignFloat("lean", &t.Lean)
 	assignInt("battery_level", &t.BatteryLevel)
 	assignInt("signal_strength", &t.SignalStrength)
 

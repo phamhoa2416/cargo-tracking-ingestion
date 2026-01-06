@@ -24,9 +24,9 @@ func (r *Repository) InsertTrackingPoint(ctx context.Context, point *shipment.Tr
 		INSERT INTO shipment_tracking (
 			time, ingested_at, shipment_id, device_id,
 			latitude, longitude, status, eta_minutes,
-			distance_to_destination, speed, heading, accuracy
+			distance_to_destination, speed, accuracy
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 		)
 		ON CONFLICT (shipment_id, device_id, time) DO NOTHING
 	`
@@ -34,7 +34,7 @@ func (r *Repository) InsertTrackingPoint(ctx context.Context, point *shipment.Tr
 	_, err := r.client.Pool().Exec(ctx, query,
 		point.Time, point.IngestedAt, point.ShipmentID, point.DeviceID,
 		point.Latitude, point.Longitude, point.Status, point.ETAMinutes,
-		point.DistanceToDestination, point.Speed, point.Heading, point.Accuracy,
+		point.DistanceToDestination, point.Speed, point.Accuracy,
 	)
 
 	return err
@@ -44,7 +44,7 @@ func (r *Repository) GetTrackingHistory(ctx context.Context, params *shipment.Tr
 	query := `
 		SELECT time, ingested_at, shipment_id, device_id,
 		       latitude, longitude, status, eta_minutes,
-		       distance_to_destination, speed, heading, accuracy
+		       distance_to_destination, speed, accuracy
 		FROM shipment_tracking
 		WHERE shipment_id = $1
 		  AND time >= $2
@@ -71,7 +71,7 @@ func (r *Repository) GetTrackingHistory(ctx context.Context, params *shipment.Tr
 		err := rows.Scan(
 			&point.Time, &point.IngestedAt, &point.ShipmentID, &point.DeviceID,
 			&point.Latitude, &point.Longitude, &point.Status, &point.ETAMinutes,
-			&point.DistanceToDestination, &point.Speed, &point.Heading, &point.Accuracy,
+			&point.DistanceToDestination, &point.Speed, &point.Accuracy,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan tracking point failed: %w", err)
@@ -109,7 +109,7 @@ func (r *Repository) GetLatestTrackingPoint(ctx context.Context, shipmentID uuid
 	query := `
 		SELECT time, ingested_at, shipment_id, device_id,
 		       latitude, longitude, status, eta_minutes,
-		       distance_to_destination, speed, heading, accuracy
+		       distance_to_destination, speed, accuracy
 		FROM shipment_tracking
 		WHERE shipment_id = $1
 		ORDER BY time DESC
@@ -120,7 +120,7 @@ func (r *Repository) GetLatestTrackingPoint(ctx context.Context, shipmentID uuid
 	err := r.client.Pool().QueryRow(ctx, query, shipmentID).Scan(
 		&point.Time, &point.IngestedAt, &point.ShipmentID, &point.DeviceID,
 		&point.Latitude, &point.Longitude, &point.Status, &point.ETAMinutes,
-		&point.DistanceToDestination, &point.Speed, &point.Heading, &point.Accuracy,
+		&point.DistanceToDestination, &point.Speed, &point.Accuracy,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {

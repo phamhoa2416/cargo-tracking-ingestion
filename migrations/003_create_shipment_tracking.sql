@@ -14,7 +14,6 @@ CREATE TABLE shipment_tracking
     distance_to_destination DOUBLE PRECISION,
 
     speed                   DOUBLE PRECISION,
-    heading                 DOUBLE PRECISION,
     accuracy                DOUBLE PRECISION,
 
     PRIMARY KEY (shipment_id, device_id, time)

@@ -65,9 +65,7 @@ func (s *Service) updateCacheAndPublish(ctx context.Context, t *telemetry.Teleme
 				DeviceID:  t.DeviceID,
 				Latitude:  *t.Latitude,
 				Longitude: *t.Longitude,
-				Altitude:  t.Altitude,
 				Speed:     t.Speed,
-				Heading:   t.Heading,
 				Accuracy:  t.Accuracy,
 				Timestamp: t.Time,
 			}
@@ -80,7 +78,6 @@ func (s *Service) updateCacheAndPublish(ctx context.Context, t *telemetry.Teleme
 			rmqLocation := &rabbitmq.Location{
 				Latitude:  *t.Latitude,
 				Longitude: *t.Longitude,
-				Altitude:  t.Altitude,
 				Accuracy:  t.Accuracy,
 				Timestamp: t.Time,
 			}
@@ -116,6 +113,15 @@ func (s *Service) updateCacheAndPublish(ctx context.Context, t *telemetry.Teleme
 		}
 		if t.Humidity != nil {
 			update.Data["humidity"] = *t.Humidity
+		}
+		if t.CO2 != nil {
+			update.Data["co2"] = *t.CO2
+		}
+		if t.Light != nil {
+			update.Data["light"] = *t.Light
+		}
+		if t.Lean != nil {
+			update.Data["lean"] = *t.Lean
 		}
 		if t.BatteryLevel != nil {
 			update.Data["battery_level"] = *t.BatteryLevel
@@ -172,9 +178,7 @@ func (s *Service) GetLatestLocation(ctx context.Context, deviceId uuid.UUID) (*t
 				Time:      cached.Timestamp,
 				Latitude:  cached.Latitude,
 				Longitude: cached.Longitude,
-				Altitude:  cached.Altitude,
 				Speed:     cached.Speed,
-				Heading:   cached.Heading,
 				Accuracy:  cached.Accuracy,
 			}, nil
 		}
@@ -192,9 +196,7 @@ func (s *Service) GetLatestLocation(ctx context.Context, deviceId uuid.UUID) (*t
 			DeviceID:  location.DeviceID,
 			Latitude:  location.Latitude,
 			Longitude: location.Longitude,
-			Altitude:  location.Altitude,
 			Speed:     location.Speed,
-			Heading:   location.Heading,
 			Accuracy:  location.Accuracy,
 			Timestamp: location.Time,
 		}

@@ -61,9 +61,7 @@ func (s *Service) updateCacheAndPublish(ctx context.Context, point *shipment.Tra
 			DeviceID:  point.DeviceID,
 			Latitude:  *point.Latitude,
 			Longitude: *point.Longitude,
-			Altitude:  nil,
 			Speed:     point.Speed,
-			Heading:   point.Heading,
 			Accuracy:  point.Accuracy,
 			Timestamp: point.Time,
 		}

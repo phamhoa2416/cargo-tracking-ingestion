@@ -14,14 +14,14 @@ type Telemetry struct {
 
 	Temperature *float64 `json:"temperature,omitempty"`
 	Humidity    *float64 `json:"humidity,omitempty"`
-	Pressure    *float64 `json:"pressure,omitempty"`
+	CO2         *float64 `json:"co2,omitempty"`
+	Light       *float64 `json:"light,omitempty"`
 
 	Latitude  *float64 `json:"latitude,omitempty"`
 	Longitude *float64 `json:"longitude,omitempty"`
-	Altitude  *float64 `json:"altitude,omitempty"`
 	Speed     *float64 `json:"speed,omitempty"`
-	Heading   *float64 `json:"heading,omitempty"`
 	Accuracy  *float64 `json:"accuracy,omitempty"`
+	Lean      *float64 `json:"lean,omitempty"`
 
 	BatteryLevel   *int  `json:"battery_level,omitempty"`
 	SignalStrength *int  `json:"signal_strength,omitempty"`
@@ -45,9 +45,7 @@ type Location struct {
 	Time      time.Time `json:"time"`
 	Latitude  float64   `json:"latitude"`
 	Longitude float64   `json:"longitude"`
-	Altitude  *float64  `json:"altitude,omitempty"`
 	Speed     *float64  `json:"speed,omitempty"`
-	Heading   *float64  `json:"heading,omitempty"`
 	Accuracy  *float64  `json:"accuracy,omitempty"`
 }
 
