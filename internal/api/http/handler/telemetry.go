@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"log"
-	"ne
 	"net/http"
 )
 
@@ -90,7 +89,6 @@ func (h *TelemetryHandler) Heartbeat(c *gin.Context) {
 func (h *TelemetryHandler) GetLatestTelemetry(c *gin.Context) {
 	deviceIDParam := c.Param("id")
 
-	
 	deviceID, err := uuid.Parse(deviceIDParam)
 	if err != nil {
 		log.Printf("[HANDLER] Invalid device_id param: %s, error: %v", deviceIDParam, err)
