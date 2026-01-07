@@ -125,7 +125,11 @@ func (ed *EventDetector) detectAndSave(t *telemetry.Telemetry) {
 		}
 	} else {
 		log.Printf("Saved %d events for device %s", len(events), t.DeviceID)
-		go ed.publishEvents(ctx, events)
+		publishCtx, publishCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		go func() {
+			defer publishCancel()
+			ed.publishEvents(publishCtx, events)
+		}()
 	}
 }
 

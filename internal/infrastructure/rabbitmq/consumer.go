@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -102,6 +103,10 @@ func (c *Consumer) handleMessage(msg amqp.Delivery) {
 		c.handleDeviceConfigUpdate(msg)
 	case "device.shipment.assignment":
 		c.handleShipmentAssignment(msg)
+	case "device.heartbeat":
+		c.handleDeviceHeartbeat(msg)
+	case "device.location":
+		c.handleDeviceLocation(msg)
 	default:
 		log.Printf("Unknown routing key: %s", msg.RoutingKey)
 		_ = msg.Ack(false)
@@ -194,6 +199,102 @@ func (c *Consumer) handleShipmentAssignment(msg amqp.Delivery) {
 
 	_ = msg.Ack(false)
 	log.Printf("Successfully processed shipment assignment for device: %s", assignment.DeviceID)
+}
+
+func (c *Consumer) handleDeviceHeartbeat(msg amqp.Delivery) {
+	var update struct {
+		MessageID      string     `json:"message_id"`
+		Timestamp      time.Time  `json:"timestamp"`
+		UpdateType     string     `json:"update_type"`
+		DeviceID       uuid.UUID  `json:"device_id"`
+		IsOnline       *bool      `json:"is_online,omitempty"`
+		LastSeen       *time.Time `json:"last_seen,omitempty"`
+		BatteryLevel   *int       `json:"battery_level,omitempty"`
+		SignalStrength *int       `json:"signal_strength,omitempty"`
+	}
+
+	if err := json.Unmarshal(msg.Body, &update); err != nil {
+		log.Printf("Invalid device heartbeat message: %v", err)
+		_ = msg.Nack(false, false)
+		return
+	}
+
+	if c.cache == nil {
+		_ = msg.Ack(false)
+		return
+	}
+
+	status := &redis.DeviceStatus{
+		DeviceID:       update.DeviceID,
+		IsOnline:       true,
+		BatteryLevel:   update.BatteryLevel,
+		SignalStrength: update.SignalStrength,
+		LastHeartbeat:  update.Timestamp,
+	}
+
+	if update.LastSeen != nil {
+		status.LastHeartbeat = *update.LastSeen
+	} else {
+		status.LastHeartbeat = update.Timestamp
+	}
+
+	if err := c.cache.SetDeviceStatus(c.ctx, status); err != nil {
+		log.Printf("Failed to update device status from heartbeat: %v", err)
+		_ = msg.Nack(false, true) // Requeue on error
+		return
+	}
+
+	_ = msg.Ack(false)
+	log.Printf("Processed heartbeat for device: %s", update.DeviceID)
+}
+
+func (c *Consumer) handleDeviceLocation(msg amqp.Delivery) {
+	var update struct {
+		MessageID  string    `json:"message_id"`
+		Timestamp  time.Time `json:"timestamp"`
+		UpdateType string    `json:"update_type"`
+		DeviceID   uuid.UUID `json:"device_id"`
+		Location   *struct {
+			Latitude  float64   `json:"latitude"`
+			Longitude float64   `json:"longitude"`
+			Accuracy  *float64  `json:"accuracy,omitempty"`
+			Timestamp time.Time `json:"timestamp"`
+		} `json:"location,omitempty"`
+	}
+
+	if err := json.Unmarshal(msg.Body, &update); err != nil {
+		log.Printf("Invalid device location message: %v", err)
+		_ = msg.Nack(false, false)
+		return
+	}
+
+	if update.Location == nil {
+		log.Printf("Location data is missing in device location message for device: %s", update.DeviceID)
+		_ = msg.Ack(false)
+		return
+	}
+
+	if c.cache == nil {
+		_ = msg.Ack(false)
+		return
+	}
+
+	location := &redis.DeviceLocation{
+		DeviceID:  update.DeviceID,
+		Latitude:  update.Location.Latitude,
+		Longitude: update.Location.Longitude,
+		Accuracy:  update.Location.Accuracy,
+		Timestamp: update.Location.Timestamp,
+	}
+
+	if err := c.cache.SetDeviceLocation(c.ctx, location); err != nil {
+		log.Printf("Failed to update device location: %v", err)
+		_ = msg.Nack(false, true) // Requeue on error
+		return
+	}
+
+	_ = msg.Ack(false)
+	log.Printf("Processed location update for device: %s", update.DeviceID)
 }
 
 func (c *Consumer) Stop() {
