@@ -7,6 +7,8 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"log"
+	"ne
 	"net/http"
 )
 
@@ -86,22 +88,40 @@ func (h *TelemetryHandler) Heartbeat(c *gin.Context) {
 }
 
 func (h *TelemetryHandler) GetLatestTelemetry(c *gin.Context) {
-	deviceID, err := uuid.Parse(c.Param("id"))
+	deviceIDParam := c.Param("id")
+
+	
+	deviceID, err := uuid.Parse(deviceIDParam)
 	if err != nil {
+		log.Printf("[HANDLER] Invalid device_id param: %s, error: %v", deviceIDParam, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
 		return
 	}
 
+	log.Printf("[HANDLER] Parsed device_id to UUID: %s", deviceID)
 	telemetry, err := h.service.GetLatestTelemetry(c.Request.Context(), deviceID)
 	if err != nil {
+		log.Printf("[HANDLER] Service error for device %s: %v", deviceID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	if telemetry == nil {
+		log.Printf("[HANDLER] No telemetry found for device: %s", deviceID)
 		c.JSON(http.StatusNotFound, gin.H{"error": "telemetry not found"})
 		return
 	}
+
+	log.Printf("[HANDLER] Returning telemetry JSON for device %s:", deviceID)
+	log.Printf("  - temperature: %v", telemetry.Temperature)
+	log.Printf("  - humidity: %v", telemetry.Humidity)
+	log.Printf("  - co2: %v", telemetry.CO2)
+	log.Printf("  - light: %v", telemetry.Light)
+	log.Printf("  - latitude: %v", telemetry.Latitude)
+	log.Printf("  - longitude: %v", telemetry.Longitude)
+	log.Printf("  - battery_level: %v", telemetry.BatteryLevel)
+	log.Printf("  - signal_strength: %v", telemetry.SignalStrength)
+	log.Printf("  - is_moving: %v", telemetry.IsMoving)
 
 	c.JSON(http.StatusOK, telemetry)
 }

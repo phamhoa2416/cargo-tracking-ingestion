@@ -154,6 +154,8 @@ func (r *Repository) BatchInsertEvents(ctx context.Context, events []*event.Even
 }
 
 func (r *Repository) GetLatestTelemetry(ctx context.Context, deviceID uuid.UUID) (*telemetry.Telemetry, error) {
+	fmt.Printf("[REPO] GetLatestTelemetry called for device: %s\n", deviceID)
+
 	query := `
 		SELECT device_id, time, hardware_uid,
 		       temperature, humidity, co2, light,
@@ -176,11 +178,52 @@ func (r *Repository) GetLatestTelemetry(ctx context.Context, deviceID uuid.UUID)
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
+		fmt.Printf("[REPO] No telemetry rows found for device: %s\n", deviceID)
 		return nil, nil
 	}
 
 	if err != nil {
+		fmt.Printf("[REPO] Error scanning telemetry for device %s: %v\n", deviceID, err)
 		return nil, fmt.Errorf("failed to get latest telemetry: %w", err)
+	}
+
+	fmt.Printf("[REPO] Scanned telemetry for device %s:\n", deviceID)
+	fmt.Printf("  - time: %v\n", t.Time)
+	fmt.Printf("  - temperature: %v (nil=%v)\n", t.Temperature, t.Temperature == nil)
+	if t.Temperature != nil {
+		fmt.Printf("    *value: %f\n", *t.Temperature)
+	}
+	fmt.Printf("  - humidity: %v (nil=%v)\n", t.Humidity, t.Humidity == nil)
+	if t.Humidity != nil {
+		fmt.Printf("    *value: %f\n", *t.Humidity)
+	}
+	fmt.Printf("  - co2: %v (nil=%v)\n", t.CO2, t.CO2 == nil)
+	if t.CO2 != nil {
+		fmt.Printf("    *value: %f\n", *t.CO2)
+	}
+	fmt.Printf("  - light: %v (nil=%v)\n", t.Light, t.Light == nil)
+	if t.Light != nil {
+		fmt.Printf("    *value: %f\n", *t.Light)
+	}
+	fmt.Printf("  - latitude: %v (nil=%v)\n", t.Latitude, t.Latitude == nil)
+	if t.Latitude != nil {
+		fmt.Printf("    *value: %f\n", *t.Latitude)
+	}
+	fmt.Printf("  - longitude: %v (nil=%v)\n", t.Longitude, t.Longitude == nil)
+	if t.Longitude != nil {
+		fmt.Printf("    *value: %f\n", *t.Longitude)
+	}
+	fmt.Printf("  - battery_level: %v (nil=%v)\n", t.BatteryLevel, t.BatteryLevel == nil)
+	if t.BatteryLevel != nil {
+		fmt.Printf("    *value: %d\n", *t.BatteryLevel)
+	}
+	fmt.Printf("  - signal_strength: %v (nil=%v)\n", t.SignalStrength, t.SignalStrength == nil)
+	if t.SignalStrength != nil {
+		fmt.Printf("    *value: %d\n", *t.SignalStrength)
+	}
+	fmt.Printf("  - is_moving: %v (nil=%v)\n", t.IsMoving, t.IsMoving == nil)
+	if t.IsMoving != nil {
+		fmt.Printf("    *value: %v\n", *t.IsMoving)
 	}
 
 	return &t, nil

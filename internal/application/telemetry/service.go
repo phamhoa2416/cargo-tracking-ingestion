@@ -169,28 +169,49 @@ func (s *Service) IngestTelemetryBatch(ctx context.Context, batch []telemetry.Te
 }
 
 func (s *Service) GetLatestTelemetry(ctx context.Context, deviceId uuid.UUID) (*telemetry.Telemetry, error) {
+	log.Printf("[SERVICE] GetLatestTelemetry called for device: %s", deviceId)
+
 	// Query database for latest telemetry
 	t, err := s.repo.GetLatestTelemetry(ctx, deviceId)
 	if err != nil {
+		log.Printf("[SERVICE] Repository error for device %s: %v", deviceId, err)
 		return nil, err
 	}
 
+	if t == nil {
+		log.Printf("[SERVICE] No telemetry found in repository for device: %s", deviceId)
+		return nil, nil
+	}
+
+	log.Printf("[SERVICE] Retrieved from repository - temp=%v, humidity=%v, co2=%v, light=%v, battery=%v, signal=%v",
+		t.Temperature, t.Humidity, t.CO2, t.Light, t.BatteryLevel, t.SignalStrength)
+
 	// If we have cached status and telemetry is missing some fields, enrich it
-	if t != nil && s.cache != nil {
+	if s.cache != nil {
 		cachedStatus, err := s.cache.GetDeviceStatus(ctx, deviceId)
 		if err == nil && cachedStatus != nil {
+			log.Printf("[SERVICE] Found cached status - battery=%v, signal=%v, isMoving=%v",
+				cachedStatus.BatteryLevel, cachedStatus.SignalStrength, cachedStatus.IsMoving)
 			// Only fill in missing fields from cache
 			if t.BatteryLevel == nil && cachedStatus.BatteryLevel != nil {
+				log.Printf("[SERVICE] Filling battery from cache: %d", *cachedStatus.BatteryLevel)
 				t.BatteryLevel = cachedStatus.BatteryLevel
 			}
 			if t.SignalStrength == nil && cachedStatus.SignalStrength != nil {
+				log.Printf("[SERVICE] Filling signal from cache: %d", *cachedStatus.SignalStrength)
 				t.SignalStrength = cachedStatus.SignalStrength
 			}
 			if t.IsMoving == nil && cachedStatus.IsMoving != nil {
+				log.Printf("[SERVICE] Filling isMoving from cache: %v", *cachedStatus.IsMoving)
 				t.IsMoving = cachedStatus.IsMoving
 			}
+		} else if err != nil {
+			log.Printf("[SERVICE] Cache error (non-fatal): %v", err)
 		}
 	}
+
+	log.Printf("[SERVICE] Returning telemetry - temp=%v, humidity=%v, co2=%v, light=%v, battery=%v, signal=%v",
+		t.Temperature, t.Humidity, t.CO2, t.Light, t.BatteryLevel, t.SignalStrength)
 
 	return t, nil
 }
