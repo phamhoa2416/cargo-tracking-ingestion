@@ -76,6 +76,7 @@ func (r *Router) Setup() *gin.Engine {
 		// Device endpoints
 		devices := v1.Group("/devices")
 		{
+			devices.GET("/:id/telemetry/latest", r.telemetryHandler.GetLatestTelemetry)
 			devices.GET("/:id/location/latest", r.telemetryHandler.GetLatestLocation)
 			devices.GET("/:id/location/history", r.telemetryHandler.GetLocationHistory)
 			devices.GET("/:id/events", r.telemetryHandler.GetDeviceEvents)

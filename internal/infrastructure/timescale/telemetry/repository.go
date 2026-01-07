@@ -153,6 +153,39 @@ func (r *Repository) BatchInsertEvents(ctx context.Context, events []*event.Even
 	return nil
 }
 
+func (r *Repository) GetLatestTelemetry(ctx context.Context, deviceID uuid.UUID) (*telemetry.Telemetry, error) {
+	query := `
+		SELECT device_id, time, hardware_uid,
+		       temperature, humidity, co2, light,
+		       latitude, longitude, speed, accuracy, lean,
+		       battery_level, signal_strength,
+		       is_moving, event_type, raw_payload
+		FROM device_telemetry
+		WHERE device_id = $1
+		ORDER BY time DESC
+		LIMIT 1
+	`
+
+	var t telemetry.Telemetry
+	err := r.client.Pool().QueryRow(ctx, query, deviceID).Scan(
+		&t.DeviceID, &t.Time, &t.HardwareUID,
+		&t.Temperature, &t.Humidity, &t.CO2, &t.Light,
+		&t.Latitude, &t.Longitude, &t.Speed, &t.Accuracy, &t.Lean,
+		&t.BatteryLevel, &t.SignalStrength,
+		&t.IsMoving, &t.EventType, &t.RawPayload,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest telemetry: %w", err)
+	}
+
+	return &t, nil
+}
+
 func (r *Repository) GetLatestLocation(ctx context.Context, deviceID uuid.UUID) (*telemetry.Location, error) {
 	query := `
 		SELECT device_id, time, latitude, longitude, speed, accuracy

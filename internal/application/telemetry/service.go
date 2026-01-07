@@ -168,6 +168,33 @@ func (s *Service) IngestTelemetryBatch(ctx context.Context, batch []telemetry.Te
 	return nil
 }
 
+func (s *Service) GetLatestTelemetry(ctx context.Context, deviceId uuid.UUID) (*telemetry.Telemetry, error) {
+	// Query database for latest telemetry
+	t, err := s.repo.GetLatestTelemetry(ctx, deviceId)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have cached status and telemetry is missing some fields, enrich it
+	if t != nil && s.cache != nil {
+		cachedStatus, err := s.cache.GetDeviceStatus(ctx, deviceId)
+		if err == nil && cachedStatus != nil {
+			// Only fill in missing fields from cache
+			if t.BatteryLevel == nil && cachedStatus.BatteryLevel != nil {
+				t.BatteryLevel = cachedStatus.BatteryLevel
+			}
+			if t.SignalStrength == nil && cachedStatus.SignalStrength != nil {
+				t.SignalStrength = cachedStatus.SignalStrength
+			}
+			if t.IsMoving == nil && cachedStatus.IsMoving != nil {
+				t.IsMoving = cachedStatus.IsMoving
+			}
+		}
+	}
+
+	return t, nil
+}
+
 func (s *Service) GetLatestLocation(ctx context.Context, deviceId uuid.UUID) (*telemetry.Location, error) {
 	// Try cache first (read-through cache)
 	if s.cache != nil {

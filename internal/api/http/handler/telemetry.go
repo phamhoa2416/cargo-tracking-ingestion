@@ -85,6 +85,27 @@ func (h *TelemetryHandler) Heartbeat(c *gin.Context) {
 	})
 }
 
+func (h *TelemetryHandler) GetLatestTelemetry(c *gin.Context) {
+	deviceID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
+		return
+	}
+
+	telemetry, err := h.service.GetLatestTelemetry(c.Request.Context(), deviceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if telemetry == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "telemetry not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, telemetry)
+}
+
 func (h *TelemetryHandler) GetLatestLocation(c *gin.Context) {
 	deviceID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
